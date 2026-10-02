@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { 
   ArrowLeft, ChevronLeft, ChevronRight, BookOpen, 
   RotateCcw, AlertCircle, Loader2, Sparkles
@@ -17,6 +17,84 @@ interface EpubReaderViewProps {
   readerSettings?: ReaderSettings;
 }
 
+/**
+ * Calcula o progresso global aproximado do livro inteiro (0 a 100%)
+ * utilizando as informações reais da API do Foliate.js.
+ */
+function calculateGlobalProgress(detail: any, viewEl: any): number {
+  if (!detail && !viewEl) return 0;
+
+  // 1. Se o SectionProgress do Foliate calculou a fração global ponderada pelo tamanho total de bytes
+  // Em foliate-js, detail.fraction quando detail.section existe representa (nextSize / sizeTotal)
+  if (
+    typeof detail?.fraction === 'number' &&
+    !isNaN(detail.fraction) &&
+    isFinite(detail.fraction) &&
+    detail.section?.total &&
+    typeof detail.section.total === 'number' &&
+    detail.section.total > 0
+  ) {
+    const clamped = Math.min(1, Math.max(0, detail.fraction));
+    return Math.round(clamped * 100);
+  }
+
+  // 2. Se o Foliate forneceu detail.location com current e total
+  if (
+    detail?.location &&
+    typeof detail.location.current === 'number' &&
+    typeof detail.location.total === 'number' &&
+    detail.location.total > 0
+  ) {
+    const locProgress = (detail.location.current / detail.location.total) * 100;
+    if (!isNaN(locProgress) && isFinite(locProgress)) {
+      return Math.min(100, Math.max(0, Math.round(locProgress)));
+    }
+  }
+
+  // 3. Fallback estrutural baseado nas seções do livro no Foliate
+  const totalSections = detail?.section?.total || viewEl?.book?.sections?.length || 0;
+  const currentSection = typeof detail?.section?.current === 'number'
+    ? detail.section.current
+    : (typeof detail?.index === 'number' ? detail.index : 0);
+
+  if (totalSections > 0) {
+    const intraSectionFrac = (typeof detail?.fraction === 'number' && !isNaN(detail.fraction) && detail.fraction >= 0 && detail.fraction <= 1)
+      ? detail.fraction
+      : 0;
+
+    const computed = ((currentSection + intraSectionFrac) / totalSections) * 100;
+    return Math.min(100, Math.max(0, Math.round(computed)));
+  }
+
+  return 0;
+}
+
+/**
+ * Obtém a localização persistente (CFI) a partir do evento relocate e da instância do Foliate.
+ */
+function extractLocationCfi(detail: any, viewEl: any): string | null {
+  if (typeof detail?.cfi === 'string' && detail.cfi.trim().length > 0) {
+    return detail.cfi.trim();
+  }
+
+  if (typeof viewEl?.lastLocation?.cfi === 'string' && viewEl.lastLocation.cfi.trim().length > 0) {
+    return viewEl.lastLocation.cfi.trim();
+  }
+
+  if (typeof viewEl?.getCFI === 'function' && typeof detail?.index === 'number' && detail?.range) {
+    try {
+      const generated = viewEl.getCFI(detail.index, detail.range);
+      if (typeof generated === 'string' && generated.trim().length > 0) {
+        return generated.trim();
+      }
+    } catch {
+      // Ignora falhas silenciosamente
+    }
+  }
+
+  return null;
+}
+
 export const EpubReaderView: React.FC<EpubReaderViewProps> = ({
   book,
   onBackToLibrary,
@@ -25,6 +103,7 @@ export const EpubReaderView: React.FC<EpubReaderViewProps> = ({
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<any>(null);
+  const saveTimeoutRef = useRef<any>(null);
 
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -68,44 +147,82 @@ export const EpubReaderView: React.FC<EpubReaderViewProps> = ({
           const detail = e.detail;
           if (!detail) return;
 
-          const cfi = detail.cfi || '';
-          if (cfi) {
-            setCurrentCfi(cfi);
+          // TAREFA 1: Extrair localização persistente de forma robusta
+          const locationCfi = extractLocationCfi(detail, viewElement);
+          if (locationCfi) {
+            setCurrentCfi(locationCfi);
           }
 
           // Atualizar título do capítulo/seção atual
-          if (detail.tocItem && detail.tocItem.label) {
+          if (detail.tocItem && typeof detail.tocItem.label === 'string') {
             setCurrentSectionTitle(detail.tocItem.label.trim());
           }
 
-          // Calcular progresso percentual se fornecido pelo Foliate
-          let percent = currentProgress;
-          if (typeof detail.fraction === 'number' && !isNaN(detail.fraction)) {
-            percent = Math.min(100, Math.max(0, Math.round(detail.fraction * 100)));
-            setCurrentProgress(percent);
+          // TAREFA 3: Calcular progresso global do livro inteiro
+          const globalPercent = calculateGlobalProgress(detail, viewElement);
+          setCurrentProgress(globalPercent);
+
+          // TAREFA 4 e 5: Salvar progresso sem alterar índices do parser clássico
+          // Debounce para evitar sobrecarga de gravações rápidas no IndexedDB
+          if (saveTimeoutRef.current) {
+            clearTimeout(saveTimeoutRef.current);
           }
 
-          // Salvar progresso no armazenamento local do AuraBooks
-          if (cfi || percent !== undefined) {
-            updateBookProgress(book.id, detail.index || 0, 0, percent);
-            // Salvar CFI no objeto Book para retomada exata
-            if (cfi) {
-              book.epubLocationCfi = cfi;
-              book.progressPercent = percent;
-              saveBook(book).catch(() => {});
+          saveTimeoutRef.current = setTimeout(() => {
+            if (!isMounted) return;
+            // Preserva currentChapterIndex e currentParagraphIndex do parser original
+            updateBookProgress(
+              book.id,
+              book.currentChapterIndex,
+              book.currentParagraphIndex,
+              globalPercent,
+              locationCfi || book.epubLocationCfi
+            ).catch(err => {
+              console.warn('Erro ao persistir progresso do EPUB:', err);
+            });
+
+            // Atualiza o objeto em memória para refletir a nova posição
+            book.progressPercent = globalPercent;
+            if (locationCfi) {
+              book.epubLocationCfi = locationCfi;
             }
-          }
+          }, 400);
         });
 
         // 4. Abrir o EPUB original através do Foliate.js
         await viewElement.open(epubBlob);
 
-        // 5. Retomar de onde parou se houver CFI salva
-        if (book.epubLocationCfi) {
+        // 5. TAREFA 2: Restaurar a posição salva com segurança
+        const savedCfi = book.epubLocationCfi;
+        if (savedCfi && typeof savedCfi === 'string' && savedCfi.trim().length > 0) {
           try {
-            await viewElement.goTo(book.epubLocationCfi);
-          } catch (goToErr) {
-            console.warn('Não foi possível retomar via CFI salva, iniciando do começo:', goToErr);
+            if (typeof viewElement.init === 'function') {
+              await viewElement.init({ lastLocation: savedCfi });
+            } else if (typeof viewElement.goTo === 'function') {
+              await viewElement.goTo(savedCfi);
+            }
+          } catch (restoreErr) {
+            console.warn('Não foi possível restaurar a posição salva via CFI. Abrindo no início do texto:', restoreErr);
+            try {
+              if (typeof viewElement.init === 'function') {
+                await viewElement.init({ showTextStart: true });
+              } else if (typeof viewElement.next === 'function') {
+                await viewElement.next();
+              }
+            } catch (fallbackNavErr) {
+              console.warn('Falha na navegação inicial de fallback:', fallbackNavErr);
+            }
+          }
+        } else {
+          // Sem posição salva: inicia no começo do texto
+          try {
+            if (typeof viewElement.init === 'function') {
+              await viewElement.init({ showTextStart: true });
+            } else if (typeof viewElement.next === 'function') {
+              await viewElement.next();
+            }
+          } catch (initErr) {
+            console.warn('Falha ao abrir início do livro:', initErr);
           }
         }
 
@@ -123,9 +240,12 @@ export const EpubReaderView: React.FC<EpubReaderViewProps> = ({
 
     loadEpubWithFoliate();
 
-    // Cleanup: remover elemento ao desmontar
+    // Cleanup: remover listener e referências ao desmontar
     return () => {
       isMounted = false;
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+      }
       if (viewRef.current) {
         viewRef.current = null;
       }

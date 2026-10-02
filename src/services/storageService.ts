@@ -148,7 +148,8 @@ export async function updateBookProgress(
   id: string,
   chapterIndex: number,
   paragraphIndex: number,
-  progressPercent?: number
+  progressPercent?: number,
+  epubLocationCfi?: string
 ): Promise<void> {
   const book = await getBook(id);
   if (!book) return;
@@ -172,7 +173,8 @@ export async function updateBookProgress(
     currentChapterIndex: chapterIndex,
     currentParagraphIndex: paragraphIndex,
     progressPercent: Math.max(0, Math.min(100, calculatedPercent)),
-    lastReadAt: Date.now()
+    lastReadAt: Date.now(),
+    ...(epubLocationCfi ? { epubLocationCfi } : {})
   };
 
   await saveBook(updated);
