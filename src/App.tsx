@@ -256,6 +256,8 @@ const AppContent: React.FC = () => {
               allTags={allTags}
               onSaveBookTags={handleSaveBookTags}
               onCreateTag={handleCreateTag}
+              searchQuery={searchQuery}
+              onSearchChange={setSearchQuery}
             />
           )}
 
