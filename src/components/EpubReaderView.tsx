@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { 
   ArrowLeft, ChevronLeft, ChevronRight, 
   RotateCcw, AlertCircle, Loader2 
@@ -9,7 +9,7 @@ import { updateBookProgress } from '../services/storageService';
 
 // Registra o Custom Element <foliate-view>
 import 'foliate-js/view.js';
-// Importa o módulo oficial de CFI do Foliate.js
+// Importa a implementação oficial de CFI do Foliate.js
 // @ts-ignore
 import * as CFI from 'foliate-js/epubcfi.js';
 
@@ -110,13 +110,14 @@ function calculateGlobalProgress(detail: any, viewEl: any, lastValidProgress: nu
 }
 
 /**
- * Gera o CFI completo utilizando a API real do Foliate.js e de foliate-js/epubcfi.js:
- * - detail.index para localizar a seção
- * - section.cfi como base CFI oficial da seção (sem fallbacks artificiais inventados)
- * - detail.range para obter a posição dentro do documento da seção via CFI.fromRange
+ * Gera o CFI preciso da posição atual utilizando a API real do Foliate.js e foliate-js/epubcfi.js:
+ * - detail.index para localizar a seção no spine
+ * - section.cfi como base CFI oficial da seção (resources.cfis)
+ * - detail.range colapsado no início (start) para obter o ponto inicial exato do conteúdo visível
+ * - CFI.fromRange em range colapsado gera um CFI de ponto (sem commas/ancestrais de range)
  * - CFI.joinIndir para unificar o baseCFI e o relativeCFI em uma CFI canônica completa
  */
-function generateCfiFromRelocate(detail: any, viewEl: any): string | null {
+function generateCfiFromRelocate(detail: any, viewEl: any): { cfi: string; isPoint: boolean } | null {
   if (!detail || typeof detail.index !== 'number') return null;
 
   const sectionIndex = detail.index;
@@ -130,27 +131,30 @@ function generateCfiFromRelocate(detail: any, viewEl: any): string | null {
   }
 
   try {
-    // Se houver um Range do documento visível, calcula o CFI relativo com CFI.fromRange
-    // e combina com o baseCFI usando CFI.joinIndir oficial de foliate-js/epubcfi.js
-    if (detail.range && typeof CFI.fromRange === 'function' && typeof CFI.joinIndir === 'function') {
-      const relativeCFI = CFI.fromRange(detail.range);
+    // Se houver um Range do documento visível, colapsa para o ponto inicial (start)
+    // O Foliate espera um ponto preciso como âncora para restaurar exatamente a página que contém esse início
+    if (detail.range && typeof detail.range.cloneRange === 'function' && typeof CFI.fromRange === 'function' && typeof CFI.joinIndir === 'function') {
+      const pointRange = detail.range.cloneRange();
+      pointRange.collapse(true); // Colapsa no ponto inicial (startContainer, startOffset)
+
+      const relativeCFI = CFI.fromRange(pointRange);
       if (relativeCFI) {
         const fullCFI = CFI.joinIndir(baseCFI, relativeCFI);
         if (typeof fullCFI === 'string' && fullCFI.trim().length > 0) {
-          return fullCFI.trim();
+          return { cfi: fullCFI.trim(), isPoint: true };
         }
       }
     }
 
-    // Se não houver range, combina apenas o baseCFI da seção via CFI.joinIndir oficial
+    // Se não houver range, combina com o baseCFI da seção
     if (typeof CFI.joinIndir === 'function') {
       const fullCFI = CFI.joinIndir(baseCFI);
       if (typeof fullCFI === 'string' && fullCFI.trim().length > 0) {
-        return fullCFI.trim();
+        return { cfi: fullCFI.trim(), isPoint: false };
       }
     }
   } catch (err) {
-    console.warn('Erro ao gerar CFI a partir do Range do Foliate:', err);
+    console.warn('Erro ao gerar CFI a partir da posição do Foliate:', err);
   }
 
   return null;
@@ -165,8 +169,10 @@ export const EpubReaderView: React.FC<EpubReaderViewProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<any>(null);
   const saveTimeoutRef = useRef<any>(null);
+  const isRestoringRef = useRef<boolean>(true);
   const hasUserNavigatedRef = useRef<boolean>(false);
   const lastValidProgressRef = useRef<number>(book.progressPercent || 0);
+  const pendingSaveRef = useRef<{ cfi: string | null; progress: number } | null>(null);
 
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -174,10 +180,40 @@ export const EpubReaderView: React.FC<EpubReaderViewProps> = ({
   const [currentProgress, setCurrentProgress] = useState<number>(book.progressPercent || 0);
   const [currentSectionTitle, setCurrentSectionTitle] = useState<string>('');
 
+  // Salva imediatamente qualquer progresso pendente (ao sair ou fechar)
+  const flushPendingSave = useCallback(() => {
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+      saveTimeoutRef.current = null;
+    }
+    const pending = pendingSaveRef.current;
+    if (pending && !isRestoringRef.current) {
+      const cfiToSave = pending.cfi || book.epubLocationCfi;
+      updateBookProgress(
+        book.id,
+        book.currentChapterIndex,
+        book.currentParagraphIndex,
+        pending.progress,
+        cfiToSave
+      ).catch(err => {
+        console.warn('Erro ao descarregar progresso pendente:', err);
+      });
+      book.progressPercent = pending.progress;
+      if (cfiToSave) {
+        book.epubLocationCfi = cfiToSave;
+      }
+    }
+  }, [book]);
+
+  const handleBackToLibrary = useCallback(() => {
+    flushPendingSave();
+    onBackToLibrary();
+  }, [flushPendingSave, onBackToLibrary]);
+
   useEffect(() => {
     let isMounted = true;
     let viewElement: any = null;
-    let isRestoring = true;
+    isRestoringRef.current = true;
     let restorationFailed = false;
 
     async function loadEpubWithFoliate() {
@@ -212,10 +248,23 @@ export const EpubReaderView: React.FC<EpubReaderViewProps> = ({
           const detail = e.detail;
           if (!detail) return;
 
-          // Gera o CFI canônico completo usando foliate-js/epubcfi.js (CFI.fromRange e CFI.joinIndir)
-          const locationCfi = generateCfiFromRelocate(detail, viewElement);
+          // Gera o CFI canônico de ponto a partir do início visível usando foliate-js/epubcfi.js
+          const cfiResult = generateCfiFromRelocate(detail, viewElement);
+          const locationCfi = cfiResult?.cfi || null;
+
           if (locationCfi) {
             setCurrentCfi(locationCfi);
+          }
+
+          // Diagnóstico temporário em ambiente de desenvolvimento
+          if (import.meta.env.DEV) {
+            console.log('[FOLIATE POSITION]', {
+              'section index': detail.index,
+              'fraction': detail.fraction,
+              'range': detail.range,
+              'generated CFI': locationCfi,
+              'CFI é ponto ou range': cfiResult?.isPoint ? 'ponto (collapsed start)' : 'seção'
+            });
           }
 
           // Atualizar título do capítulo/seção atual se disponível no TOC
@@ -228,9 +277,12 @@ export const EpubReaderView: React.FC<EpubReaderViewProps> = ({
           lastValidProgressRef.current = globalPercent;
           setCurrentProgress(globalPercent);
 
+          // Registra posição atual como candidata a salvar
+          pendingSaveRef.current = { cfi: locationCfi, progress: globalPercent };
+
           // Se ainda estamos no processo inicial de abertura e restauração,
           // NÃO persistir no IndexedDB para evitar sobrescrever o CFI com a posição inicial (ex.: página 0)
-          if (isRestoring) {
+          if (isRestoringRef.current) {
             return;
           }
 
@@ -240,14 +292,13 @@ export const EpubReaderView: React.FC<EpubReaderViewProps> = ({
             return;
           }
 
-          // Salvar progresso com debounce
+          // Salvar progresso com debounce de 400ms
           if (saveTimeoutRef.current) {
             clearTimeout(saveTimeoutRef.current);
           }
 
           saveTimeoutRef.current = setTimeout(() => {
             if (!isMounted) return;
-            // Se locationCfi não puder ser gerado, preserva o CFI salvo anteriormente
             const cfiToSave = locationCfi || book.epubLocationCfi;
             // Preserva book.currentChapterIndex e book.currentParagraphIndex originais do AuraBooks
             updateBookProgress(
@@ -273,7 +324,14 @@ export const EpubReaderView: React.FC<EpubReaderViewProps> = ({
 
         // 5. Restaurar a posição salva usando viewElement.goTo(book.epubLocationCfi)
         const savedCfi = book.epubLocationCfi;
+
         if (savedCfi && typeof savedCfi === 'string' && savedCfi.trim().length > 0) {
+          if (import.meta.env.DEV) {
+            console.log('[FOLIATE RESTORE]', {
+              'saved CFI': savedCfi
+            });
+          }
+
           try {
             await viewElement.goTo(savedCfi.trim());
           } catch (restoreErr) {
@@ -303,7 +361,7 @@ export const EpubReaderView: React.FC<EpubReaderViewProps> = ({
         }
 
         // Restauração concluída: libera para que os eventos relocate do usuário sejam salvos
-        isRestoring = false;
+        isRestoringRef.current = false;
 
         if (isMounted) {
           setIsLoading(false);
@@ -319,13 +377,18 @@ export const EpubReaderView: React.FC<EpubReaderViewProps> = ({
 
     loadEpubWithFoliate();
 
-    // Cleanup: remover timers, listeners e referências ao desmontar
+    // Listener para descarregar save caso a aba seja fechada
+    const handleBeforeUnload = () => {
+      flushPendingSave();
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
+    // Cleanup: descarregar saves pendentes, remover timers e listeners ao desmontar
     return () => {
       isMounted = false;
-      if (saveTimeoutRef.current) {
-        clearTimeout(saveTimeoutRef.current);
-        saveTimeoutRef.current = null;
-      }
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      flushPendingSave();
+
       if (viewElement && typeof viewElement.close === 'function') {
         try {
           viewElement.close();
@@ -340,7 +403,7 @@ export const EpubReaderView: React.FC<EpubReaderViewProps> = ({
         containerRef.current.innerHTML = '';
       }
     };
-  }, [book.id]);
+  }, [book.id, flushPendingSave]);
 
   // Navegação entre páginas
   const handleNext = () => {
@@ -381,7 +444,7 @@ export const EpubReaderView: React.FC<EpubReaderViewProps> = ({
       <header className="sticky top-0 z-40 bg-[#F9F8F5]/95 backdrop-blur-md border-b border-[#E8E2D9] px-4 sm:px-8 h-14 flex items-center justify-between gap-4">
         {/* Voltar à Biblioteca */}
         <button
-          onClick={onBackToLibrary}
+          onClick={handleBackToLibrary}
           className="inline-flex items-center gap-2 text-xs font-semibold text-stone-700 hover:text-stone-950 px-2.5 py-1.5 rounded-lg hover:bg-stone-200/50 transition-colors font-sans cursor-pointer"
         >
           <ArrowLeft className="w-4 h-4" />
@@ -406,7 +469,10 @@ export const EpubReaderView: React.FC<EpubReaderViewProps> = ({
         {/* Botão de Fallback para o Leitor Padrão */}
         <div className="flex items-center gap-2">
           <button
-            onClick={onFallbackToDefaultReader}
+            onClick={() => {
+              flushPendingSave();
+              onFallbackToDefaultReader();
+            }}
             className="inline-flex items-center gap-1.5 text-xs text-stone-600 hover:text-stone-900 hover:bg-stone-200/60 px-2.5 py-1.5 rounded-lg border border-stone-200/80 transition-colors font-sans cursor-pointer shadow-2xs"
             title="Alternar para o Leitor Clássico do AuraBooks"
           >
@@ -468,7 +534,10 @@ export const EpubReaderView: React.FC<EpubReaderViewProps> = ({
                 </p>
               </div>
               <button
-                onClick={onFallbackToDefaultReader}
+                onClick={() => {
+                  flushPendingSave();
+                  onFallbackToDefaultReader();
+                }}
                 className="px-5 py-2.5 bg-stone-950 hover:bg-stone-800 text-white rounded-xl text-xs font-semibold font-sans shadow-sm transition-colors flex items-center gap-2 cursor-pointer"
               >
                 <RotateCcw className="w-4 h-4 text-amber-300" />
