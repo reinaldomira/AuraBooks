@@ -1,0 +1,131 @@
+import React from 'react';
+import { 
+  Search, Sun, Moon, Bell, Sparkles, Cloud, 
+  Menu, LogIn, LogOut, CheckCircle2 
+} from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
+import { AppView } from './Sidebar';
+
+interface TopNavbarProps {
+  searchQuery: string;
+  onSearchChange: (q: string) => void;
+  onToggleMobileMenu: () => void;
+  onNavigate: (view: AppView) => void;
+}
+
+export const TopNavbar: React.FC<TopNavbarProps> = ({
+  searchQuery,
+  onSearchChange,
+  onToggleMobileMenu,
+  onNavigate,
+}) => {
+  const { user, login, logout, isSyncing } = useAuth();
+
+  return (
+    <header className="sticky top-0 z-30 bg-[#F9F8F5]/90 backdrop-blur-md border-b border-[#EBE6DF] px-4 sm:px-8 py-3.5 flex items-center justify-between gap-4">
+      {/* Mobile Menu Button & Search */}
+      <div className="flex items-center gap-3 flex-1 max-w-xl">
+        <button
+          onClick={onToggleMobileMenu}
+          className="md:hidden p-2 text-stone-600 hover:text-stone-900 rounded-lg hover:bg-stone-200/60"
+        >
+          <Menu className="w-5 h-5" />
+        </button>
+
+        <div className="relative w-full">
+          <Search className="w-4 h-4 text-stone-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => onSearchChange(e.target.value)}
+            placeholder="Buscar título, autor ou gênero..."
+            className="w-full pl-9 pr-4 py-2 text-xs sm:text-sm bg-white rounded-lg border border-[#E5E0D8] text-stone-900 placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-stone-800/10 focus:border-stone-400 transition-all shadow-2xs"
+          />
+        </div>
+      </div>
+
+      {/* Right Controls: Ambient light, Notifications, User profile */}
+      <div className="flex items-center gap-3 shrink-0">
+        {/* Ambient theme pill */}
+        <div className="hidden sm:flex items-center bg-[#ECE8E1] rounded-lg p-0.5 border border-[#DDD7CD]">
+          <button 
+            title="Modo Claro"
+            className="p-1.5 rounded-md bg-white text-stone-900 shadow-2xs"
+          >
+            <Sun className="w-3.5 h-3.5" />
+          </button>
+          <button 
+            title="Sépia Leitura"
+            className="p-1.5 rounded-md text-stone-500 hover:text-stone-800"
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+          </button>
+          <button 
+            title="Modo Noturno"
+            className="p-1.5 rounded-md text-stone-500 hover:text-stone-800"
+          >
+            <Moon className="w-3.5 h-3.5" />
+          </button>
+        </div>
+
+        {/* Notifications */}
+        <button 
+          title="Notificações do clube de leitura"
+          className="relative p-2 text-stone-600 hover:text-stone-900 rounded-lg hover:bg-stone-200/50 transition-colors"
+        >
+          <Bell className="w-4 h-4" />
+          <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-[#9A3412] rounded-full" />
+        </button>
+
+        {/* User Profile Badge */}
+        <div className="flex items-center gap-2.5 pl-2 border-l border-[#E5E0D8]">
+          <div className="w-8 h-8 rounded-full overflow-hidden bg-stone-900 text-amber-200 ring-2 ring-[#E5E0D8] shrink-0 flex items-center justify-center font-bold text-xs">
+            {user?.photoURL ? (
+              <img
+                src={user.photoURL}
+                alt={user.displayName || 'Reinaldo'}
+                className="w-full h-full object-cover"
+              />
+            ) : (
+              <span>R</span>
+            )}
+          </div>
+
+          <div className="hidden lg:block text-left">
+            <div className="flex items-center gap-1.5">
+              <span className="font-semibold text-xs text-stone-900 block leading-tight">
+                {user?.displayName || 'Reinaldo'}
+              </span>
+              {user && (
+                <span title={isSyncing ? 'Sincronizando nuvem...' : 'Nuvem Conectada'}>
+                  <Cloud className={`w-3 h-3 ${isSyncing ? 'text-amber-500 animate-pulse' : 'text-emerald-600'}`} />
+                </span>
+              )}
+            </div>
+            <span className="text-[10px] text-stone-500 block">
+              Leitor Ativo
+            </span>
+          </div>
+
+          {!user ? (
+            <button
+              onClick={login}
+              title="Entrar com o Google para salvar na nuvem"
+              className="text-stone-400 hover:text-stone-800 p-1"
+            >
+              <LogIn className="w-3.5 h-3.5" />
+            </button>
+          ) : (
+            <button
+              onClick={logout}
+              title="Desconectar"
+              className="text-stone-400 hover:text-rose-600 p-1"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+      </div>
+    </header>
+  );
+};

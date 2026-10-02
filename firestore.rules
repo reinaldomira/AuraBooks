@@ -1,0 +1,63 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 1. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidBook(data) {
+      return data.userId == request.auth.uid
+        && data.bookId is string && data.bookId.size() <= 128
+        && data.title is string && data.title.size() <= 300
+        && data.author is string && data.author.size() <= 200
+        && data.format in ['epub', 'pdf', 'txt']
+        && data.progressPercent is number && data.progressPercent >= 0 && data.progressPercent <= 100
+        && data.currentChapterIndex is number && data.currentChapterIndex >= 0
+        && data.currentParagraphIndex is number && data.currentParagraphIndex >= 0
+        && data.lastReadAt is number;
+    }
+
+    function isValidProfile(data) {
+      return data.userId == request.auth.uid
+        && data.displayName is string && data.displayName.size() <= 150;
+    }
+
+    // User books collection
+    match /users/{userId}/books/{bookId} {
+      allow get, list: if isOwner(userId);
+      allow create: if isOwner(userId) 
+        && isValidId(bookId) 
+        && isValidBook(request.resource.data);
+      allow update: if isOwner(userId) 
+        && isValidId(bookId) 
+        && isValidBook(request.resource.data)
+        && request.resource.data.userId == resource.data.userId
+        && request.resource.data.bookId == resource.data.bookId;
+      allow delete: if isOwner(userId) && isValidId(bookId);
+    }
+
+    // User profile
+    match /users/{userId}/profile/{profileId} {
+      allow get, list: if isOwner(userId);
+      allow create, update: if isOwner(userId)
+        && isValidId(profileId)
+        && isValidProfile(request.resource.data);
+      allow delete: if isOwner(userId) && isValidId(profileId);
+    }
+  }
+}

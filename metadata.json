@@ -1,0 +1,7 @@
+{
+  "name": "Lumina Books - Biblioteca de Autores & Audiolivro",
+  "description": "Biblioteca literária editorial com leitor imersivo em duas páginas, organização automática de acervo em PDF e EPUB, e narração em áudio por voz natural.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+

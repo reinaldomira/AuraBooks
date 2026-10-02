@@ -1,0 +1,127 @@
+{
+  "entities": {
+    "UserBook": {
+      "title": "UserBook",
+      "description": "Represents a book saved in the user's personal cloud library with reading progress.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "The UID of the user who owns this book."
+        },
+        "bookId": {
+          "type": "string",
+          "description": "Unique identifier for the book."
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 300,
+          "description": "Title of the book."
+        },
+        "author": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "Author of the book."
+        },
+        "format": {
+          "type": "string",
+          "enum": ["epub", "pdf", "txt"],
+          "description": "File format of the book."
+        },
+        "category": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "Category or genre."
+        },
+        "coverUrl": {
+          "type": "string",
+          "maxLength": 500000,
+          "description": "Cover thumbnail data URL or asset path."
+        },
+        "progressPercent": {
+          "type": "number",
+          "description": "Reading progress percentage (0-100)."
+        },
+        "currentChapterIndex": {
+          "type": "number",
+          "description": "Active chapter index."
+        },
+        "currentParagraphIndex": {
+          "type": "number",
+          "description": "Active paragraph index."
+        },
+        "lastReadAt": {
+          "type": "number",
+          "description": "Epoch timestamp when last read."
+        },
+        "isFavorite": {
+          "type": "boolean",
+          "description": "Whether book is marked as favorite."
+        },
+        "totalWords": {
+          "type": "number",
+          "description": "Total words in the book."
+        },
+        "estimatedAudioMinutes": {
+          "type": "number",
+          "description": "Estimated audio duration in minutes."
+        }
+      },
+      "required": [
+        "userId",
+        "bookId",
+        "title",
+        "author",
+        "format",
+        "progressPercent",
+        "currentChapterIndex",
+        "currentParagraphIndex",
+        "lastReadAt"
+      ]
+    },
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile document.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "User UID."
+        },
+        "displayName": {
+          "type": "string",
+          "maxLength": 150,
+          "description": "Display name."
+        },
+        "email": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "User email."
+        },
+        "photoURL": {
+          "type": "string",
+          "maxLength": 1000,
+          "description": "Avatar photo URL."
+        },
+        "createdAt": {
+          "type": "number",
+          "description": "Account creation epoch timestamp."
+        }
+      },
+      "required": [
+        "userId",
+        "displayName"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/books/{bookId}": {
+      "schema": "UserBook",
+      "description": "User library collection containing their books and sync progress."
+    },
+    "/users/{userId}/profile/default": {
+      "schema": "UserProfile",
+      "description": "Profile information for the authenticated user."
+    }
+  }
+}
