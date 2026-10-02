@@ -9,7 +9,7 @@ import { updateBookProgress } from '../services/storageService';
 
 // Registra o Custom Element <foliate-view>
 import 'foliate-js/view.js';
-// Importa a implementação oficial de CFI do Foliate.js
+// Importa o módulo oficial de CFI do Foliate.js
 // @ts-ignore
 import * as CFI from 'foliate-js/epubcfi.js';
 
@@ -22,18 +22,26 @@ interface EpubReaderViewProps {
 
 /**
  * Calcula o progresso global do livro inteiro (0 a 100%)
- * baseado estritamente na API e especificação oficial do Foliate.js:
+ * baseado estritamente na API e propriedades reais do Foliate.js:
  * - viewElement.book.sections com propriedades reais: size e linear
  * - detail.index e detail.fraction (progresso interno da seção)
- * - Ignora seções com linear === "no"
+ * - Seções com linear === "no" não fazem parte do progresso linear
  */
-function calculateGlobalProgress(detail: any, viewEl: any): number {
+function calculateGlobalProgress(detail: any, viewEl: any, lastValidProgress: number): number {
   if (!viewEl?.book?.sections || typeof detail?.index !== 'number') {
-    return 0;
+    return lastValidProgress;
   }
 
   const sections = viewEl.book.sections as Array<{ size?: number; linear?: string }>;
   const currentIndex = detail.index;
+  const currentSection = sections[currentIndex];
+
+  // Seção não-linear (linear === "no"): não faz parte do progresso linear.
+  // Preserva o último progresso linear conhecido em vez de voltar para 0 ou produzir valores incoerentes.
+  if (currentSection && currentSection.linear === 'no') {
+    return lastValidProgress;
+  }
+
   const fraction = (typeof detail?.fraction === 'number' && !isNaN(detail.fraction) && isFinite(detail.fraction))
     ? Math.max(0, Math.min(1, detail.fraction))
     : 0;
@@ -51,7 +59,7 @@ function calculateGlobalProgress(detail: any, viewEl: any): number {
     }
   }
 
-  // 2. Se as seções possuírem tamanhos em bytes válidos
+  // 2. Se as seções lineares possuírem tamanhos em bytes válidos
   if (totalLinearSize > 0) {
     // completedSize: soma do size das seções lineares estritamente anteriores à seção atual
     let completedSize = 0;
@@ -65,7 +73,6 @@ function calculateGlobalProgress(detail: any, viewEl: any): number {
 
     // currentSectionProgress: contribuição proporcional da seção atual caso seja linear
     let currentSectionProgress = 0;
-    const currentSection = sections[currentIndex];
     if (currentSection && currentSection.linear !== 'no') {
       const sz = typeof currentSection.size === 'number' && !isNaN(currentSection.size) && currentSection.size > 0
         ? currentSection.size
@@ -74,12 +81,13 @@ function calculateGlobalProgress(detail: any, viewEl: any): number {
     }
 
     const calculated = ((completedSize + currentSectionProgress) / totalLinearSize) * 100;
-    if (isNaN(calculated) || !isFinite(calculated)) return 0;
+    if (isNaN(calculated) || !isFinite(calculated)) {
+      return lastValidProgress;
+    }
     return Math.min(100, Math.max(0, Math.round(calculated)));
   }
 
-  // 3. Fallback defensivo: se as seções não fornecerem .size
-  // Distribui o peso igualmente entre as seções marcadas como lineares (linear !== 'no')
+  // 3. Fallback defensivo para seções sem size: distribui uniformemente entre as seções lineares
   if (linearSectionCount > 0) {
     let completedLinearSections = 0;
     for (let i = 0; i < currentIndex && i < sections.length; i++) {
@@ -88,40 +96,45 @@ function calculateGlobalProgress(detail: any, viewEl: any): number {
       }
     }
 
-    const currentSection = sections[currentIndex];
     const isCurLinear = currentSection && currentSection.linear !== 'no';
     const sectionWeight = isCurLinear ? fraction : 0;
 
     const fallbackProgress = ((completedLinearSections + sectionWeight) / linearSectionCount) * 100;
-    if (isNaN(fallbackProgress) || !isFinite(fallbackProgress)) return 0;
+    if (isNaN(fallbackProgress) || !isFinite(fallbackProgress)) {
+      return lastValidProgress;
+    }
     return Math.min(100, Math.max(0, Math.round(fallbackProgress)));
   }
 
-  return 0;
+  return lastValidProgress;
 }
 
 /**
- * Gera o CFI completo utilizando a API real do módulo foliate-js/epubcfi.js:
+ * Gera o CFI completo utilizando a API real do Foliate.js e de foliate-js/epubcfi.js:
  * - detail.index para localizar a seção
- * - section.cfi como base CFI da seção (com fallback para CFI.fake.fromIndex)
+ * - section.cfi como base CFI oficial da seção (sem fallbacks artificiais inventados)
  * - detail.range para obter a posição dentro do documento da seção via CFI.fromRange
  * - CFI.joinIndir para unificar o baseCFI e o relativeCFI em uma CFI canônica completa
  */
 function generateCfiFromRelocate(detail: any, viewEl: any): string | null {
   if (!detail || typeof detail.index !== 'number') return null;
 
+  const sectionIndex = detail.index;
+  const sections = viewEl?.book?.sections;
+  const section = sections ? sections[sectionIndex] : null;
+
+  // Apenas utiliza o CFI oficial fornecido pela seção do Foliate (resources.cfis)
+  const baseCFI = section?.cfi;
+  if (!baseCFI || typeof baseCFI !== 'string' || baseCFI.trim().length === 0) {
+    return null;
+  }
+
   try {
-    const sectionIndex = detail.index;
-    const sections = viewEl?.book?.sections;
-    const section = sections ? sections[sectionIndex] : null;
-
-    // Obtém o CFI base da seção ou gera via CFI.fake do Foliate
-    const baseCFI = section?.cfi ?? (CFI.fake?.fromIndex ? CFI.fake.fromIndex(sectionIndex) : `/6/${(sectionIndex + 1) * 2}`);
-
-    // Se houver um Range do documento visível, calcula a posição relativa e faz o joinIndir oficial
-    if (detail.range && typeof CFI.fromRange === 'function') {
+    // Se houver um Range do documento visível, calcula o CFI relativo com CFI.fromRange
+    // e combina com o baseCFI usando CFI.joinIndir oficial de foliate-js/epubcfi.js
+    if (detail.range && typeof CFI.fromRange === 'function' && typeof CFI.joinIndir === 'function') {
       const relativeCFI = CFI.fromRange(detail.range);
-      if (relativeCFI && typeof CFI.joinIndir === 'function') {
+      if (relativeCFI) {
         const fullCFI = CFI.joinIndir(baseCFI, relativeCFI);
         if (typeof fullCFI === 'string' && fullCFI.trim().length > 0) {
           return fullCFI.trim();
@@ -129,15 +142,15 @@ function generateCfiFromRelocate(detail: any, viewEl: any): string | null {
       }
     }
 
-    // Se o Range não estiver presente ou for nulo, retorna o CFI base da seção encapsulado em epubcfi(...)
-    if (baseCFI) {
-      if (CFI.isCFI?.test ? CFI.isCFI.test(baseCFI) : baseCFI.startsWith('epubcfi(')) {
-        return baseCFI;
+    // Se não houver range, combina apenas o baseCFI da seção via CFI.joinIndir oficial
+    if (typeof CFI.joinIndir === 'function') {
+      const fullCFI = CFI.joinIndir(baseCFI);
+      if (typeof fullCFI === 'string' && fullCFI.trim().length > 0) {
+        return fullCFI.trim();
       }
-      return `epubcfi(${baseCFI})`;
     }
   } catch (err) {
-    console.warn('Erro ao gerar CFI a partir do relocate:', err);
+    console.warn('Erro ao gerar CFI a partir do Range do Foliate:', err);
   }
 
   return null;
@@ -152,6 +165,8 @@ export const EpubReaderView: React.FC<EpubReaderViewProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<any>(null);
   const saveTimeoutRef = useRef<any>(null);
+  const hasUserNavigatedRef = useRef<boolean>(false);
+  const lastValidProgressRef = useRef<number>(book.progressPercent || 0);
 
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -163,6 +178,7 @@ export const EpubReaderView: React.FC<EpubReaderViewProps> = ({
     let isMounted = true;
     let viewElement: any = null;
     let isRestoring = true;
+    let restorationFailed = false;
 
     async function loadEpubWithFoliate() {
       setIsLoading(true);
@@ -196,7 +212,7 @@ export const EpubReaderView: React.FC<EpubReaderViewProps> = ({
           const detail = e.detail;
           if (!detail) return;
 
-          // Gera o CFI canônico completo usando foliate-js/epubcfi.js
+          // Gera o CFI canônico completo usando foliate-js/epubcfi.js (CFI.fromRange e CFI.joinIndir)
           const locationCfi = generateCfiFromRelocate(detail, viewElement);
           if (locationCfi) {
             setCurrentCfi(locationCfi);
@@ -208,12 +224,19 @@ export const EpubReaderView: React.FC<EpubReaderViewProps> = ({
           }
 
           // Calcular progresso global do livro inteiro usando viewElement.book.sections (size e linear)
-          const globalPercent = calculateGlobalProgress(detail, viewElement);
+          const globalPercent = calculateGlobalProgress(detail, viewElement, lastValidProgressRef.current);
+          lastValidProgressRef.current = globalPercent;
           setCurrentProgress(globalPercent);
 
           // Se ainda estamos no processo inicial de abertura e restauração,
           // NÃO persistir no IndexedDB para evitar sobrescrever o CFI com a posição inicial (ex.: página 0)
           if (isRestoring) {
+            return;
+          }
+
+          // Se a restauração do CFI falhou e o usuário ainda não navegou,
+          // NÃO grava a posição inicial de fallback sobre o CFI antigo
+          if (restorationFailed && !hasUserNavigatedRef.current) {
             return;
           }
 
@@ -224,6 +247,7 @@ export const EpubReaderView: React.FC<EpubReaderViewProps> = ({
 
           saveTimeoutRef.current = setTimeout(() => {
             if (!isMounted) return;
+            // Se locationCfi não puder ser gerado, preserva o CFI salvo anteriormente
             const cfiToSave = locationCfi || book.epubLocationCfi;
             // Preserva book.currentChapterIndex e book.currentParagraphIndex originais do AuraBooks
             updateBookProgress(
@@ -253,6 +277,7 @@ export const EpubReaderView: React.FC<EpubReaderViewProps> = ({
           try {
             await viewElement.goTo(savedCfi.trim());
           } catch (restoreErr) {
+            restorationFailed = true;
             console.warn('Não foi possível restaurar a posição salva via CFI no Foliate.js. Abrindo no início:', restoreErr);
             try {
               await viewElement.goTo(0);
@@ -319,12 +344,14 @@ export const EpubReaderView: React.FC<EpubReaderViewProps> = ({
 
   // Navegação entre páginas
   const handleNext = () => {
+    hasUserNavigatedRef.current = true;
     if (viewRef.current && typeof viewRef.current.next === 'function') {
       viewRef.current.next();
     }
   };
 
   const handlePrev = () => {
+    hasUserNavigatedRef.current = true;
     if (viewRef.current && typeof viewRef.current.prev === 'function') {
       viewRef.current.prev();
     }
@@ -335,9 +362,11 @@ export const EpubReaderView: React.FC<EpubReaderViewProps> = ({
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'ArrowRight' || e.key === 'PageDown') {
         e.preventDefault();
+        hasUserNavigatedRef.current = true;
         handleNext();
       } else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
         e.preventDefault();
+        hasUserNavigatedRef.current = true;
         handlePrev();
       }
     };
