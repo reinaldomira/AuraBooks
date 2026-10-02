@@ -42,6 +42,7 @@ export interface Book {
   addedAt: number;
   description?: string;
   language?: string;
+  epubLocationCfi?: string;
 }
 
 export type ReaderTheme = 'alabaster' | 'sepia' | 'dark' | 'mint';

@@ -4,6 +4,7 @@ import { parseEpubFile } from '../services/epubParser';
 import { parsePdfFile } from '../services/pdfParser';
 import { parseTxtFile } from '../services/txtParser';
 import { saveBook } from '../services/storageService';
+import { saveOriginalEpub } from '../services/epubStorageService';
 import { Book } from '../types/book';
 
 interface UploadModalProps {
@@ -38,6 +39,8 @@ export const UploadModal: React.FC<UploadModalProps> = ({
       if (ext === 'epub') {
         setStatusMessage('Extraindo capítulos, metadados e sumário do EPUB...');
         book = await parseEpubFile(file);
+        // Preserva o arquivo EPUB original intacto no armazenamento para o Foliate.js
+        await saveOriginalEpub(book.id, file);
       } else if (ext === 'pdf') {
         setStatusMessage('Renderizando capa e extraindo páginas do PDF...');
         book = await parsePdfFile(file);

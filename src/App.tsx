@@ -18,8 +18,10 @@ import { LibraryView } from './components/LibraryView';
 import { ExploreView } from './components/ExploreView';
 import { BookDetailView } from './components/BookDetailView';
 import { ReaderView } from './components/ReaderView';
+import { EpubReaderView } from './components/EpubReaderView';
 import { UploadModal } from './components/UploadModal';
 import { MiniAudioPlayer } from './components/MiniAudioPlayer';
+import { deleteOriginalEpub } from './services/epubStorageService';
 
 const AppContent: React.FC = () => {
   const [books, setBooks] = useState<Book[]>([]);
@@ -30,6 +32,7 @@ const AppContent: React.FC = () => {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [allTags, setAllTags] = useState<string[]>(() => getUserCustomTags());
+  const [useFallbackReader, setUseFallbackReader] = useState(false);
 
   const [readerSettings, setReaderSettings] = useState<ReaderSettings>({
     theme: 'alabaster',
@@ -74,6 +77,7 @@ const AppContent: React.FC = () => {
   const handleOpenReader = (book: Book) => {
     loadBook(book);
     setSelectedBook(book);
+    setUseFallbackReader(false);
     setCurrentView('reader');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -92,6 +96,7 @@ const AppContent: React.FC = () => {
   const handleBookImported = async (newBook: Book) => {
     await refreshBooks();
     setSelectedBook(newBook);
+    setUseFallbackReader(false);
     setCurrentView('reader');
     if (user) {
       syncCurrentBook(newBook);
@@ -103,6 +108,7 @@ const AppContent: React.FC = () => {
       stopAudio();
     }
     await deleteBook(id);
+    await deleteOriginalEpub(id);
     await refreshBooks();
     if (selectedBook?.id === id) {
       const remaining = books.filter(b => b.id !== id);
@@ -170,6 +176,20 @@ const AppContent: React.FC = () => {
 
   // If in immersive reader, show full-screen book spread
   if (currentView === 'reader' && selectedBook) {
+    if (selectedBook.format === 'epub' && !useFallbackReader) {
+      return (
+        <EpubReaderView
+          book={selectedBook}
+          onBackToLibrary={() => {
+            setCurrentView('library');
+            refreshBooks();
+          }}
+          onFallbackToDefaultReader={() => setUseFallbackReader(true)}
+          readerSettings={readerSettings}
+        />
+      );
+    }
+
     return (
       <ReaderView
         book={selectedBook}
