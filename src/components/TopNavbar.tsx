@@ -1,7 +1,7 @@
 import React from 'react';
 import { 
   Search, Sun, Moon, Bell, Sparkles, Cloud, 
-  Menu, LogIn, LogOut, CheckCircle2 
+  Menu, LogIn, LogOut, CheckCircle2, RefreshCw 
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { AppView } from './Sidebar';
@@ -19,7 +19,7 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
   onToggleMobileMenu,
   onNavigate,
 }) => {
-  const { user, login, logout, isSyncing } = useAuth();
+  const { user, login, logout, isSyncing, syncMessage, syncAll } = useAuth();
 
   return (
     <header className="sticky top-0 z-30 bg-[#F9F8F5]/90 backdrop-blur-md border-b border-[#EBE6DF] px-4 sm:px-8 py-3.5 flex items-center justify-between gap-4">
@@ -77,51 +77,71 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
           <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-[#9A3412] rounded-full" />
         </button>
 
-        {/* User Profile Badge */}
+        {/* User Profile / Cloud Sync Badge */}
         <div className="flex items-center gap-2.5 pl-2 border-l border-[#E5E0D8]">
-          <div className="w-8 h-8 rounded-full overflow-hidden bg-stone-900 text-amber-200 ring-2 ring-[#E5E0D8] shrink-0 flex items-center justify-center font-bold text-xs">
-            {user?.photoURL ? (
-              <img
-                src={user.photoURL}
-                alt={user.displayName || 'Reinaldo'}
-                className="w-full h-full object-cover"
-              />
-            ) : (
-              <span>R</span>
-            )}
-          </div>
+          {user ? (
+            <>
+              {/* Avatar */}
+              <div className="w-8 h-8 rounded-full overflow-hidden bg-stone-900 text-amber-200 ring-2 ring-[#E5E0D8] shrink-0 flex items-center justify-center font-bold text-xs">
+                {user.photoURL ? (
+                  <img
+                    src={user.photoURL}
+                    alt={user.displayName || 'Usuário'}
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  <span>{(user.displayName || user.email || 'U')[0].toUpperCase()}</span>
+                )}
+              </div>
 
-          <div className="hidden lg:block text-left">
-            <div className="flex items-center gap-1.5">
-              <span className="font-semibold text-xs text-stone-900 block leading-tight">
-                {user?.displayName || 'Reinaldo'}
-              </span>
-              {user && (
-                <span title={isSyncing ? 'Sincronizando nuvem...' : 'Nuvem Conectada'}>
-                  <Cloud className={`w-3 h-3 ${isSyncing ? 'text-amber-500 animate-pulse' : 'text-emerald-600'}`} />
+              {/* User Info & Cloud Sync Indicator */}
+              <div className="hidden lg:block text-left">
+                <div className="flex items-center gap-1.5">
+                  <span className="font-semibold text-xs text-stone-900 block leading-tight max-w-[120px] truncate">
+                    {user.displayName || user.email?.split('@')[0] || 'Usuário'}
+                  </span>
+                  <button
+                    onClick={() => syncAll()}
+                    disabled={isSyncing}
+                    title={isSyncing ? (syncMessage || 'Sincronizando nuvem...') : 'Nuvem Ativa - Clique para sincronizar agora'}
+                    className="hover:scale-110 transition-transform"
+                  >
+                    <Cloud className={`w-3.5 h-3.5 ${isSyncing ? 'text-amber-500 animate-pulse' : 'text-emerald-600'}`} />
+                  </button>
+                </div>
+                <span className="text-[10px] text-stone-500 block truncate max-w-[140px]">
+                  {isSyncing ? (syncMessage || 'Sincronizando...') : 'Nuvem Conectada'}
                 </span>
-              )}
-            </div>
-            <span className="text-[10px] text-stone-500 block">
-              Leitor Ativo
-            </span>
-          </div>
+              </div>
 
-          {!user ? (
-            <button
-              onClick={login}
-              title="Entrar com o Google para salvar na nuvem"
-              className="text-stone-400 hover:text-stone-800 p-1"
-            >
-              <LogIn className="w-3.5 h-3.5" />
-            </button>
+              {/* Sync Button */}
+              <button
+                onClick={() => syncAll()}
+                disabled={isSyncing}
+                title="Sincronizar com a nuvem agora"
+                className="hidden sm:flex text-stone-400 hover:text-stone-700 p-1.5 rounded-md hover:bg-stone-200/50 transition-colors"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin text-amber-600' : ''}`} />
+              </button>
+
+              {/* Logout Button */}
+              <button
+                onClick={logout}
+                title="Desconectar da conta Google"
+                className="text-stone-400 hover:text-rose-600 p-1.5 rounded-md hover:bg-stone-200/50 transition-colors"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+              </button>
+            </>
           ) : (
             <button
-              onClick={logout}
-              title="Desconectar"
-              className="text-stone-400 hover:text-rose-600 p-1"
+              onClick={login}
+              title="Entrar com o Google para salvar livros e progresso na nuvem e abrir em qualquer PC"
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-stone-900 hover:bg-stone-800 text-stone-100 rounded-lg text-xs font-medium shadow-xs transition-all hover:shadow-sm"
             >
-              <LogOut className="w-3.5 h-3.5" />
+              <Cloud className="w-3.5 h-3.5 text-amber-400" />
+              <span className="hidden sm:inline">Conectar Nuvem</span>
+              <span className="sm:hidden">Entrar</span>
             </button>
           )}
         </div>

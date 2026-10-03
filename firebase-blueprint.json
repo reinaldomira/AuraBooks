@@ -65,6 +65,19 @@
         "estimatedAudioMinutes": {
           "type": "number",
           "description": "Estimated audio duration in minutes."
+        },
+        "epubLocationCfi": {
+          "type": "string",
+          "maxLength": 1000,
+          "description": "Last saved CFI reading position."
+        },
+        "hasCloudFile": {
+          "type": "boolean",
+          "description": "Whether the original book file is backed up in cloud fileChunks."
+        },
+        "totalChunks": {
+          "type": "number",
+          "description": "Total chunks of the original book file."
         }
       },
       "required": [
@@ -77,6 +90,41 @@
         "currentChapterIndex",
         "currentParagraphIndex",
         "lastReadAt"
+      ]
+    },
+    "FileChunk": {
+      "title": "FileChunk",
+      "description": "Binary chunk of an original book file for cross-device sync.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "User UID who owns this file."
+        },
+        "bookId": {
+          "type": "string",
+          "description": "Book ID associated with this file."
+        },
+        "chunkIndex": {
+          "type": "number",
+          "description": "Zero-based index of this chunk."
+        },
+        "totalChunks": {
+          "type": "number",
+          "description": "Total number of chunks in the file."
+        },
+        "data": {
+          "type": "string",
+          "maxLength": 800000,
+          "description": "Base64-encoded chunk data."
+        }
+      },
+      "required": [
+        "userId",
+        "bookId",
+        "chunkIndex",
+        "totalChunks",
+        "data"
       ]
     },
     "UserProfile": {
@@ -118,6 +166,10 @@
     "/users/{userId}/books/{bookId}": {
       "schema": "UserBook",
       "description": "User library collection containing their books and sync progress."
+    },
+    "/users/{userId}/books/{bookId}/fileChunks/{chunkId}": {
+      "schema": "FileChunk",
+      "description": "File chunks for synchronizing original book files across devices."
     },
     "/users/{userId}/profile/default": {
       "schema": "UserProfile",

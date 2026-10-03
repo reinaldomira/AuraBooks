@@ -4,7 +4,7 @@ import {
   Trash2, Headphones, Sparkles, Filter, ChevronRight,
   BookMarked, Check, Info, Flame, Bookmark, Quote, 
   Share2, Plus, LayoutGrid, List as ListIcon, Award,
-  Upload, AlertTriangle, X, Tag, FolderPlus, ArrowUpDown
+  Upload, AlertTriangle, X, Tag, FolderPlus, ArrowUpDown, Cloud
 } from 'lucide-react';
 import { Book } from '../types/book';
 import { useAudioReader } from '../context/AudioReaderContext';
@@ -92,7 +92,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   onSearchChange,
 }) => {
   const { currentBook, isPlaying, isPaused, togglePlayPause } = useAudioReader();
-  const { user } = useAuth();
+  const { user, login } = useAuth();
 
   const [selectedTab, setSelectedTab] = useState<FilterTab>('todos');
   const [sortBy, setSortBy] = useState<SortOption>('lastRead');
@@ -262,6 +262,32 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         </div>
       ) : (
         <>
+          {/* Banner de Sincronização em Nuvem quando desconectado */}
+          {!user && (
+            <div className="mb-6 p-4 rounded-xl bg-amber-50/80 border border-amber-200/90 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-lg bg-amber-100 text-amber-800 flex items-center justify-center shrink-0">
+                  <Cloud className="w-5 h-5 text-amber-700" />
+                </div>
+                <div>
+                  <h4 className="text-xs font-semibold text-stone-900 font-sans">
+                    Sincronização em Nuvem Desconectada
+                  </h4>
+                  <p className="text-[11px] text-stone-600 font-sans">
+                    Seus livros estão armazenados apenas neste computador. Conecte sua conta Google para ler em múltiplos PCs e celulares.
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={login}
+                className="shrink-0 px-3.5 py-1.5 bg-stone-900 hover:bg-stone-800 text-stone-100 rounded-lg text-xs font-medium transition-colors flex items-center justify-center gap-1.5 shadow-2xs"
+              >
+                <Cloud className="w-3.5 h-3.5 text-amber-400" />
+                <span>Conectar Conta Google</span>
+              </button>
+            </div>
+          )}
+
           {/* Seção Superior: "Continuar Lendo" & Painel de Estatísticas */}
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
             {/* Coluna Esquerda: Cartão "Continuar Lendo" ou Estado Vazio Apropriado */}

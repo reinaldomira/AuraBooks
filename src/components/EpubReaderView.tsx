@@ -3,9 +3,10 @@ import {
   ArrowLeft, ChevronLeft, ChevronRight, 
   RotateCcw, AlertCircle, Loader2 
 } from 'lucide-react';
-import { Book, ReaderSettings } from '../types/book';
-import { getOriginalEpub } from '../services/epubStorageService';
-import { updateBookProgress } from '../services/storageService';
+import { Book, ReaderSettings, ReadingSession } from '../types/book';
+import { getOriginalEpub, saveOriginalEpub } from '../services/epubStorageService';
+import { updateBookProgress, saveReadingSession } from '../services/storageService';
+import { auth, downloadBookFileFromCloud } from '../services/firebase';
 
 // Registra o Custom Element <foliate-view>
 import 'foliate-js/view.js';
@@ -160,6 +161,8 @@ function generateCfiFromRelocate(detail: any, viewEl: any): { cfi: string; isPoi
   return null;
 }
 
+const MIN_SESSION_SECONDS = 5;
+
 export const EpubReaderView: React.FC<EpubReaderViewProps> = ({
   book,
   onBackToLibrary,
@@ -173,6 +176,15 @@ export const EpubReaderView: React.FC<EpubReaderViewProps> = ({
   const hasUserNavigatedRef = useRef<boolean>(false);
   const lastValidProgressRef = useRef<number>(book.progressPercent || 0);
   const pendingSaveRef = useRef<{ cfi: string | null; progress: number } | null>(null);
+
+  // Memória da Sessão de Leitura
+  const sessionStartedAtRef = useRef<number | null>(null);
+  const sessionStartProgressRef = useRef<number>(0);
+  const sessionStartCfiRef = useRef<string | undefined>(undefined);
+  const sessionAccumulatedSecondsRef = useRef<number>(0);
+  const sessionLastActiveTimestampRef = useRef<number | null>(null);
+  const sessionIsActiveRef = useRef<boolean>(false);
+  const sessionEndedRef = useRef<boolean>(false);
 
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -205,10 +217,71 @@ export const EpubReaderView: React.FC<EpubReaderViewProps> = ({
     }
   }, [book]);
 
+  // Inicia a sessão de leitura assim que o livro e a restauração de posição estiverem prontos
+  const startReadingSession = useCallback((initialProgress: number, initialCfi?: string) => {
+    if (sessionIsActiveRef.current || sessionEndedRef.current) return;
+
+    const now = Date.now();
+    sessionStartedAtRef.current = now;
+    sessionStartProgressRef.current = initialProgress;
+    sessionStartCfiRef.current = initialCfi;
+    sessionAccumulatedSecondsRef.current = 0;
+    sessionLastActiveTimestampRef.current = document.visibilityState === 'visible' ? now : null;
+    sessionIsActiveRef.current = true;
+    sessionEndedRef.current = false;
+  }, []);
+
+  // Encerra a sessão de leitura uma única vez e persiste no IndexedDB se tiver pelo menos 5s
+  const endReadingSession = useCallback(() => {
+    if (!sessionIsActiveRef.current || sessionEndedRef.current) return;
+    sessionEndedRef.current = true;
+    sessionIsActiveRef.current = false;
+
+    const now = Date.now();
+    // Se a aba estava visível, acumula o tempo da última janela ativa
+    if (sessionLastActiveTimestampRef.current !== null) {
+      const elapsed = (now - sessionLastActiveTimestampRef.current) / 1000;
+      sessionAccumulatedSecondsRef.current += Math.max(0, elapsed);
+      sessionLastActiveTimestampRef.current = null;
+    }
+
+    const durationSeconds = Math.round(sessionAccumulatedSecondsRef.current);
+
+    // Regra: Não salvar sessões com menos de MIN_SESSION_SECONDS (5s)
+    if (durationSeconds < MIN_SESSION_SECONDS) {
+      return;
+    }
+
+    const startedAt = sessionStartedAtRef.current || now;
+    const startProgress = sessionStartProgressRef.current ?? 0;
+    const startCfi = sessionStartCfiRef.current;
+
+    // Regra: endProgress e endCfi usam o último progresso e CFI válidos conhecidos pelo leitor
+    const endProgress = pendingSaveRef.current?.progress ?? lastValidProgressRef.current ?? book.progressPercent ?? 0;
+    const endCfi = pendingSaveRef.current?.cfi || currentCfi || book.epubLocationCfi || undefined;
+
+    const session: ReadingSession = {
+      id: 'session_' + startedAt + '_' + Math.random().toString(36).substring(2, 9),
+      bookId: book.id,
+      startedAt,
+      endedAt: now,
+      durationSeconds,
+      startProgress: Math.max(0, Math.min(100, Math.round(startProgress))),
+      endProgress: Math.max(0, Math.min(100, Math.round(endProgress))),
+      ...(startCfi ? { startCfi } : {}),
+      ...(endCfi ? { endCfi } : {}),
+    };
+
+    saveReadingSession(session).catch(err => {
+      console.warn('Erro ao salvar sessão de leitura:', err);
+    });
+  }, [book.id, book.progressPercent, book.epubLocationCfi, currentCfi]);
+
   const handleBackToLibrary = useCallback(() => {
     flushPendingSave();
+    endReadingSession();
     onBackToLibrary();
-  }, [flushPendingSave, onBackToLibrary]);
+  }, [flushPendingSave, endReadingSession, onBackToLibrary]);
 
   useEffect(() => {
     let isMounted = true;
@@ -222,10 +295,22 @@ export const EpubReaderView: React.FC<EpubReaderViewProps> = ({
 
       try {
         // 1. Recuperar o arquivo EPUB original (Blob) do IndexedDB
-        const epubBlob = await getOriginalEpub(book.id);
+        let epubBlob = await getOriginalEpub(book.id);
+
+        // Se não existir localmente mas o usuário estiver autenticado, tenta baixar da nuvem
+        if (!epubBlob && auth.currentUser) {
+          try {
+            epubBlob = await downloadBookFileFromCloud(auth.currentUser.uid, book.id);
+            if (epubBlob) {
+              await saveOriginalEpub(book.id, epubBlob);
+            }
+          } catch (cloudErr) {
+            console.warn('Tentativa de recuperar EPUB da nuvem falhou:', cloudErr);
+          }
+        }
 
         if (!epubBlob) {
-          throw new Error('Arquivo original deste EPUB não foi encontrado no armazenamento local.');
+          throw new Error('Arquivo original deste EPUB não foi encontrado no armazenamento local ou na nuvem.');
         }
 
         if (!containerRef.current || !isMounted) return;
@@ -365,6 +450,9 @@ export const EpubReaderView: React.FC<EpubReaderViewProps> = ({
 
         if (isMounted) {
           setIsLoading(false);
+          const initialProg = lastValidProgressRef.current ?? book.progressPercent ?? 0;
+          const initialCfi = currentCfi || book.epubLocationCfi || undefined;
+          startReadingSession(initialProg, initialCfi);
         }
       } catch (err: any) {
         console.error('Falha ao renderizar EPUB com Foliate.js:', err);
@@ -377,17 +465,44 @@ export const EpubReaderView: React.FC<EpubReaderViewProps> = ({
 
     loadEpubWithFoliate();
 
-    // Listener para descarregar save caso a aba seja fechada
+    // Pausar/retomar tempo ativo da sessão de leitura com base em document.visibilityState
+    const handleVisibilityChange = () => {
+      if (!sessionIsActiveRef.current || sessionEndedRef.current) return;
+      const now = Date.now();
+      if (document.visibilityState === 'hidden') {
+        if (sessionLastActiveTimestampRef.current !== null) {
+          const elapsed = (now - sessionLastActiveTimestampRef.current) / 1000;
+          sessionAccumulatedSecondsRef.current += Math.max(0, elapsed);
+          sessionLastActiveTimestampRef.current = null;
+        }
+      } else if (document.visibilityState === 'visible') {
+        sessionLastActiveTimestampRef.current = now;
+      }
+    };
+
+    // Listener para descarregar save e encerrar sessão caso a aba seja fechada
     const handleBeforeUnload = () => {
       flushPendingSave();
+      endReadingSession();
     };
-    window.addEventListener('beforeunload', handleBeforeUnload);
 
-    // Cleanup: descarregar saves pendentes, remover timers e listeners ao desmontar
+    const handlePageHide = () => {
+      flushPendingSave();
+      endReadingSession();
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    window.addEventListener('pagehide', handlePageHide);
+
+    // Cleanup: descarregar saves pendentes, encerrar sessão, remover timers e listeners ao desmontar
     return () => {
       isMounted = false;
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('beforeunload', handleBeforeUnload);
+      window.removeEventListener('pagehide', handlePageHide);
       flushPendingSave();
+      endReadingSession();
 
       if (viewElement && typeof viewElement.close === 'function') {
         try {
@@ -403,7 +518,7 @@ export const EpubReaderView: React.FC<EpubReaderViewProps> = ({
         containerRef.current.innerHTML = '';
       }
     };
-  }, [book.id, flushPendingSave]);
+  }, [book.id, book.progressPercent, book.epubLocationCfi, currentCfi, flushPendingSave, startReadingSession, endReadingSession]);
 
   // Navegação entre páginas
   const handleNext = () => {
@@ -471,6 +586,7 @@ export const EpubReaderView: React.FC<EpubReaderViewProps> = ({
           <button
             onClick={() => {
               flushPendingSave();
+              endReadingSession();
               onFallbackToDefaultReader();
             }}
             className="inline-flex items-center gap-1.5 text-xs text-stone-600 hover:text-stone-900 hover:bg-stone-200/60 px-2.5 py-1.5 rounded-lg border border-stone-200/80 transition-colors font-sans cursor-pointer shadow-2xs"
@@ -536,6 +652,7 @@ export const EpubReaderView: React.FC<EpubReaderViewProps> = ({
               <button
                 onClick={() => {
                   flushPendingSave();
+                  endReadingSession();
                   onFallbackToDefaultReader();
                 }}
                 className="px-5 py-2.5 bg-stone-950 hover:bg-stone-800 text-white rounded-xl text-xs font-semibold font-sans shadow-sm transition-colors flex items-center gap-2 cursor-pointer"

@@ -1,16 +1,17 @@
 import React, { useState, useRef } from 'react';
-import { Upload, FileText, CheckCircle2, AlertCircle, X, BookOpen, Sparkles, Loader2 } from 'lucide-react';
+import { Upload, FileText, CheckCircle2, AlertCircle, X, BookOpen, Sparkles, Loader2, Cloud } from 'lucide-react';
 import { parseEpubFile } from '../services/epubParser';
 import { parsePdfFile } from '../services/pdfParser';
 import { parseTxtFile } from '../services/txtParser';
 import { saveBook } from '../services/storageService';
 import { saveOriginalEpub } from '../services/epubStorageService';
 import { Book } from '../types/book';
+import { useAuth } from '../context/AuthContext';
 
 interface UploadModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onBookImported: (book: Book) => void;
+  onBookImported: (book: Book, originalFile?: Blob | File) => void;
 }
 
 export const UploadModal: React.FC<UploadModalProps> = ({
@@ -18,11 +19,13 @@ export const UploadModal: React.FC<UploadModalProps> = ({
   onClose,
   onBookImported,
 }) => {
+  const { user } = useAuth();
   const [isDragging, setIsDragging] = useState(false);
   const [status, setStatus] = useState<'idle' | 'parsing' | 'success' | 'error'>('idle');
   const [statusMessage, setStatusMessage] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
   const [parsedBook, setParsedBook] = useState<Book | null>(null);
+  const [lastUploadedFile, setLastUploadedFile] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   if (!isOpen) return null;
@@ -31,6 +34,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({
     setStatus('parsing');
     setErrorMessage('');
     setParsedBook(null);
+    setLastUploadedFile(file);
 
     const ext = file.name.split('.').pop()?.toLowerCase();
 
@@ -55,8 +59,8 @@ export const UploadModal: React.FC<UploadModalProps> = ({
       await saveBook(book);
       setParsedBook(book);
       setStatus('success');
-      // Immediately refresh books in parent component
-      onBookImported(book);
+      // Immediately refresh books in parent component with original file for cloud backup
+      onBookImported(book, file);
     } catch (err: any) {
       console.error('Error parsing book file:', err);
       setStatus('error');
@@ -83,7 +87,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({
 
   const handleFinish = () => {
     if (parsedBook) {
-      onBookImported(parsedBook);
+      onBookImported(parsedBook, lastUploadedFile || undefined);
     }
     handleClose();
   };
@@ -174,6 +178,18 @@ export const UploadModal: React.FC<UploadModalProps> = ({
                   O AuraBooks analisa o arquivo, gera capa em alta definição, separa por capítulos, calcula a duração estimada de leitura e converte tudo em áudio falado por parágrafo.
                 </p>
               </div>
+
+              {!user && (
+                <div className="mt-3 p-3 rounded-lg bg-amber-50/90 border border-amber-200 text-xs text-amber-900 flex items-start gap-2.5">
+                  <Cloud className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-semibold block text-amber-950">Acessar livros em múltiplos computadores?</span>
+                    <span className="text-amber-800">
+                      Conecte sua conta Google no botão <strong>"Conectar Nuvem"</strong> da barra superior para sincronizar seus livros e continuar lendo em qualquer PC.
+                    </span>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 

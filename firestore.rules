@@ -32,6 +32,14 @@ service cloud.firestore {
         && data.lastReadAt is number;
     }
 
+    function isValidFileChunk(data) {
+      return data.userId == request.auth.uid
+        && data.bookId is string && data.bookId.size() <= 128
+        && data.chunkIndex is number && data.chunkIndex >= 0
+        && data.totalChunks is number && data.totalChunks >= 1
+        && data.data is string && data.data.size() <= 800000;
+    }
+
     function isValidProfile(data) {
       return data.userId == request.auth.uid
         && data.displayName is string && data.displayName.size() <= 150;
@@ -49,6 +57,15 @@ service cloud.firestore {
         && request.resource.data.userId == resource.data.userId
         && request.resource.data.bookId == resource.data.bookId;
       allow delete: if isOwner(userId) && isValidId(bookId);
+
+      // File chunks subcollection for multi-device sync
+      match /fileChunks/{chunkId} {
+        allow get, list: if isOwner(userId);
+        allow create, update: if isOwner(userId)
+          && isValidId(chunkId)
+          && isValidFileChunk(request.resource.data);
+        allow delete: if isOwner(userId) && isValidId(chunkId);
+      }
     }
 
     // User profile

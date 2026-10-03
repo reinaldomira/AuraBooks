@@ -68,6 +68,18 @@ export interface AudioSettings {
   sleepTimerEndsAt: number | null;
 }
 
+export interface ReadingSession {
+  id: string;
+  bookId: string;
+  startedAt: number;
+  endedAt: number;
+  durationSeconds: number;
+  startProgress: number;
+  endProgress: number;
+  startCfi?: string;
+  endCfi?: string;
+}
+
 export interface Bookmark {
   id: string;
   bookId: string;

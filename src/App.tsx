@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
+import { Cloud, Loader2 } from 'lucide-react';
 import { Book, ReaderSettings } from './types/book';
 import { 
   initStorage, getAllBooks, deleteBook, toggleFavorite, 
@@ -21,7 +22,8 @@ import { ReaderView } from './components/ReaderView';
 import { EpubReaderView } from './components/EpubReaderView';
 import { UploadModal } from './components/UploadModal';
 import { MiniAudioPlayer } from './components/MiniAudioPlayer';
-import { deleteOriginalEpub } from './services/epubStorageService';
+import { deleteOriginalEpub, hasOriginalEpub, saveOriginalEpub } from './services/epubStorageService';
+import { deleteBookFromCloud, downloadBookFileFromCloud } from './services/firebase';
 
 const AppContent: React.FC = () => {
   const [books, setBooks] = useState<Book[]>([]);
@@ -31,6 +33,7 @@ const AppContent: React.FC = () => {
   const [isUploadOpen, setIsUploadOpen] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [isOpeningCloudBook, setIsOpeningCloudBook] = useState(false);
   const [allTags, setAllTags] = useState<string[]>(() => getUserCustomTags());
   const [useFallbackReader, setUseFallbackReader] = useState(false);
 
@@ -44,7 +47,7 @@ const AppContent: React.FC = () => {
   });
 
   const { currentBook, isPlaying, isPaused, playBook, loadBook, stopAudio } = useAudioReader();
-  const { user, syncCurrentBook, syncProgress } = useAuth();
+  const { user, isSyncing, syncCurrentBook, syncProgress } = useAuth();
 
   // Load books and settings on startup
   useEffect(() => {
@@ -74,7 +77,32 @@ const AppContent: React.FC = () => {
     setBooks(list);
   };
 
-  const handleOpenReader = (book: Book) => {
+  // Recarrega os livros automaticamente quando a sincronização com a nuvem finaliza
+  useEffect(() => {
+    if (!isSyncing && user) {
+      refreshBooks();
+    }
+  }, [isSyncing, user]);
+
+  const handleOpenReader = async (book: Book) => {
+    // Se for um EPUB novo vindo da nuvem e ainda não baixado para este computador, baixa agora
+    if (book.format === 'epub') {
+      const existsLocally = await hasOriginalEpub(book.id);
+      if (!existsLocally && user) {
+        setIsOpeningCloudBook(true);
+        try {
+          const blob = await downloadBookFileFromCloud(user.uid, book.id);
+          if (blob) {
+            await saveOriginalEpub(book.id, blob);
+          }
+        } catch (err) {
+          console.warn('Erro ao obter arquivo EPUB da nuvem antes de abrir:', err);
+        } finally {
+          setIsOpeningCloudBook(false);
+        }
+      }
+    }
+
     loadBook(book);
     setSelectedBook(book);
     setUseFallbackReader(false);
@@ -93,13 +121,13 @@ const AppContent: React.FC = () => {
     playBook(book, book.currentChapterIndex, book.currentParagraphIndex);
   };
 
-  const handleBookImported = async (newBook: Book) => {
+  const handleBookImported = async (newBook: Book, originalFile?: Blob | File) => {
     await refreshBooks();
     setSelectedBook(newBook);
     setUseFallbackReader(false);
     setCurrentView('reader');
     if (user) {
-      syncCurrentBook(newBook);
+      syncCurrentBook(newBook, originalFile);
     }
   };
 
@@ -109,6 +137,9 @@ const AppContent: React.FC = () => {
     }
     await deleteBook(id);
     await deleteOriginalEpub(id);
+    if (user) {
+      deleteBookFromCloud(user.uid, id).catch(() => {});
+    }
     await refreshBooks();
     if (selectedBook?.id === id) {
       const remaining = books.filter(b => b.id !== id);
@@ -302,6 +333,21 @@ const AppContent: React.FC = () => {
         onClose={() => setIsUploadOpen(false)}
         onBookImported={handleBookImported}
       />
+
+      {/* Cloud Book Download Overlay */}
+      {isOpeningCloudBook && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-stone-950/60 backdrop-blur-xs animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl p-6 shadow-2xl border border-stone-200 flex flex-col items-center gap-3 max-w-xs text-center">
+            <div className="w-12 h-12 rounded-full bg-amber-100 text-amber-800 flex items-center justify-center">
+              <Loader2 className="w-6 h-6 text-amber-700 animate-spin" />
+            </div>
+            <div>
+              <h3 className="font-semibold text-stone-900 text-sm">Baixando livro da nuvem...</h3>
+              <p className="text-xs text-stone-500 mt-1">Sincronizando o arquivo EPUB para este computador. Isso leva apenas alguns instantes.</p>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

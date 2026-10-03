@@ -1,14 +1,15 @@
-import { Book, Bookmark, BookHighlight, ReaderSettings, AudioSettings } from '../types/book';
+import { Book, Bookmark, BookHighlight, ReaderSettings, AudioSettings, ReadingSession } from '../types/book';
 import { SAMPLE_BOOKS } from './sampleBooks';
 
 const DB_NAME = 'AuraBooksDB';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 const STORES = {
   BOOKS: 'books',
   BOOKMARKS: 'bookmarks',
   HIGHLIGHTS: 'highlights',
-  SETTINGS: 'settings'
+  SETTINGS: 'settings',
+  READING_SESSIONS: 'readingSessions',
 };
 
 const DEFAULT_READER_SETTINGS: ReaderSettings = {
@@ -48,6 +49,10 @@ function openDB(): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains(STORES.SETTINGS)) {
         db.createObjectStore(STORES.SETTINGS);
+      }
+      if (!db.objectStoreNames.contains(STORES.READING_SESSIONS)) {
+        const sessionStore = db.createObjectStore(STORES.READING_SESSIONS, { keyPath: 'id' });
+        sessionStore.createIndex('bookId', 'bookId', { unique: false });
       }
     };
 
@@ -134,6 +139,10 @@ export async function saveBook(book: Book): Promise<void> {
 }
 
 export async function deleteBook(id: string): Promise<void> {
+  await deleteReadingSessions(id).catch(() => {});
+  await deleteHighlightsForBook(id).catch(() => {});
+  await deleteBookmarksForBook(id).catch(() => {});
+
   const db = await openDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORES.BOOKS, 'readwrite');
@@ -325,4 +334,137 @@ export async function updateBookTags(bookId: string, tags: string[]): Promise<Bo
   await saveBook(updated);
   return updated;
 }
+
+/* ================= SESSÕES DE LEITURA (READING SESSIONS) ================= */
+
+export async function saveReadingSession(session: ReadingSession): Promise<void> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    if (!db.objectStoreNames.contains(STORES.READING_SESSIONS)) {
+      resolve();
+      return;
+    }
+    const tx = db.transaction(STORES.READING_SESSIONS, 'readwrite');
+    const store = tx.objectStore(STORES.READING_SESSIONS);
+    const req = store.put(session);
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+  });
+}
+
+export async function getReadingSessions(bookId: string): Promise<ReadingSession[]> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    if (!db.objectStoreNames.contains(STORES.READING_SESSIONS)) {
+      resolve([]);
+      return;
+    }
+    const tx = db.transaction(STORES.READING_SESSIONS, 'readonly');
+    const store = tx.objectStore(STORES.READING_SESSIONS);
+    const index = store.index('bookId');
+    const req = index.getAll(bookId);
+    req.onsuccess = () => {
+      const sessions: ReadingSession[] = req.result || [];
+      // Ordenar por startedAt DESC
+      sessions.sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0));
+      resolve(sessions);
+    };
+    req.onerror = () => reject(req.error);
+  });
+}
+
+export async function getAllReadingSessions(): Promise<ReadingSession[]> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    if (!db.objectStoreNames.contains(STORES.READING_SESSIONS)) {
+      resolve([]);
+      return;
+    }
+    const tx = db.transaction(STORES.READING_SESSIONS, 'readonly');
+    const store = tx.objectStore(STORES.READING_SESSIONS);
+    const req = store.getAll();
+    req.onsuccess = () => {
+      const sessions: ReadingSession[] = req.result || [];
+      // Ordenar por startedAt DESC
+      sessions.sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0));
+      resolve(sessions);
+    };
+    req.onerror = () => reject(req.error);
+  });
+}
+
+export async function deleteReadingSessions(bookId: string): Promise<void> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    if (!db.objectStoreNames.contains(STORES.READING_SESSIONS)) {
+      resolve();
+      return;
+    }
+    const tx = db.transaction(STORES.READING_SESSIONS, 'readwrite');
+    const store = tx.objectStore(STORES.READING_SESSIONS);
+    const index = store.index('bookId');
+    const req = index.openCursor(IDBKeyRange.only(bookId));
+    req.onsuccess = (event) => {
+      const cursor = (event.target as IDBRequest<IDBCursorWithValue>).result;
+      if (cursor) {
+        cursor.delete();
+        cursor.continue();
+      } else {
+        resolve();
+      }
+    };
+    req.onerror = () => reject(req.error);
+    tx.oncomplete = () => resolve();
+  });
+}
+
+export async function getTotalReadingTime(bookId: string): Promise<number> {
+  const sessions = await getReadingSessions(bookId);
+  return sessions.reduce((acc, curr) => acc + (curr.durationSeconds || 0), 0);
+}
+
+export async function deleteHighlightsForBook(bookId: string): Promise<void> {
+  try {
+    localStorage.removeItem(`aurabooks_hl_${bookId}`);
+    const db = await openDB();
+    if (db.objectStoreNames.contains(STORES.HIGHLIGHTS)) {
+      const tx = db.transaction(STORES.HIGHLIGHTS, 'readwrite');
+      const store = tx.objectStore(STORES.HIGHLIGHTS);
+      const index = store.index('bookId');
+      const req = index.openCursor(IDBKeyRange.only(bookId));
+      req.onsuccess = (e) => {
+        const cursor = (e.target as IDBRequest<IDBCursorWithValue>).result;
+        if (cursor) {
+          cursor.delete();
+          cursor.continue();
+        }
+      };
+    }
+  } catch {
+    // ignore
+  }
+}
+
+export async function deleteBookmarksForBook(bookId: string): Promise<void> {
+  try {
+    localStorage.removeItem(`aurabooks_bm_${bookId}`);
+    const db = await openDB();
+    if (db.objectStoreNames.contains(STORES.BOOKMARKS)) {
+      const tx = db.transaction(STORES.BOOKMARKS, 'readwrite');
+      const store = tx.objectStore(STORES.BOOKMARKS);
+      const index = store.index('bookId');
+      const req = index.openCursor(IDBKeyRange.only(bookId));
+      req.onsuccess = (e) => {
+        const cursor = (e.target as IDBRequest<IDBCursorWithValue>).result;
+        if (cursor) {
+          cursor.delete();
+          cursor.continue();
+        }
+      };
+    }
+  } catch {
+    // ignore
+  }
+}
+
 
