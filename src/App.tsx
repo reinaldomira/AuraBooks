@@ -7,7 +7,7 @@ import React, { useState, useEffect } from 'react';
 import { Cloud, Loader2 } from 'lucide-react';
 import { Book, ReaderSettings } from './types/book';
 import { 
-  initStorage, getAllBooks, deleteBook, toggleFavorite, 
+  initStorage, getAllBooks, getBook, deleteBook, toggleFavorite, 
   updateBookProgress, getReaderSettings, saveReaderSettings,
   getUserCustomTags, addUserCustomTag, updateBookTags 
 } from './services/storageService';
@@ -85,15 +85,18 @@ const AppContent: React.FC = () => {
   }, [isSyncing, user]);
 
   const handleOpenReader = async (book: Book) => {
+    // Carrega a versão mais atual diretamente do banco IndexedDB para garantir que progresso e CFI recentes sejam usados
+    const freshBook = (await getBook(book.id)) || book;
+
     // Se for um EPUB novo vindo da nuvem e ainda não baixado para este computador, baixa agora
-    if (book.format === 'epub') {
-      const existsLocally = await hasOriginalEpub(book.id);
+    if (freshBook.format === 'epub') {
+      const existsLocally = await hasOriginalEpub(freshBook.id);
       if (!existsLocally && user) {
         setIsOpeningCloudBook(true);
         try {
-          const blob = await downloadBookFileFromCloud(user.uid, book.id);
+          const blob = await downloadBookFileFromCloud(user.uid, freshBook.id);
           if (blob) {
-            await saveOriginalEpub(book.id, blob);
+            await saveOriginalEpub(freshBook.id, blob);
           }
         } catch (err) {
           console.warn('Erro ao obter arquivo EPUB da nuvem antes de abrir:', err);
@@ -103,8 +106,8 @@ const AppContent: React.FC = () => {
       }
     }
 
-    loadBook(book);
-    setSelectedBook(book);
+    loadBook(freshBook);
+    setSelectedBook(freshBook);
     setUseFallbackReader(false);
     setCurrentView('reader');
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -211,9 +214,9 @@ const AppContent: React.FC = () => {
       return (
         <EpubReaderView
           book={selectedBook}
-          onBackToLibrary={() => {
+          onBackToLibrary={async () => {
+            await refreshBooks();
             setCurrentView('library');
-            refreshBooks();
           }}
           onFallbackToDefaultReader={() => setUseFallbackReader(true)}
           readerSettings={readerSettings}
@@ -224,9 +227,9 @@ const AppContent: React.FC = () => {
     return (
       <ReaderView
         book={selectedBook}
-        onBackToLibrary={() => {
+        onBackToLibrary={async () => {
+          await refreshBooks();
           setCurrentView('library');
-          refreshBooks();
         }}
         onToggleFavorite={handleToggleFavorite}
         readerSettings={readerSettings}

@@ -1,12 +1,12 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { 
   ArrowLeft, ChevronLeft, ChevronRight, 
-  RotateCcw, AlertCircle, Loader2 
+  RotateCcw, AlertCircle, Loader2, Bookmark, Check
 } from 'lucide-react';
 import { Book, ReaderSettings, ReadingSession } from '../types/book';
 import { getOriginalEpub, saveOriginalEpub } from '../services/epubStorageService';
 import { updateBookProgress, saveReadingSession } from '../services/storageService';
-import { auth, downloadBookFileFromCloud } from '../services/firebase';
+import { auth, downloadBookFileFromCloud, syncProgressToCloud } from '../services/firebase';
 
 // Registra o Custom Element <foliate-view>
 import 'foliate-js/view.js';
@@ -189,33 +189,71 @@ export const EpubReaderView: React.FC<EpubReaderViewProps> = ({
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [currentCfi, setCurrentCfi] = useState<string>(book.epubLocationCfi || '');
+  const currentCfiRef = useRef<string>(book.epubLocationCfi || '');
   const [currentProgress, setCurrentProgress] = useState<number>(book.progressPercent || 0);
   const [currentSectionTitle, setCurrentSectionTitle] = useState<string>('');
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
+  const saveStatusTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Salva imediatamente qualquer progresso pendente (ao sair ou fechar)
-  const flushPendingSave = useCallback(() => {
+  // Salva imediatamente qualquer progresso pendente de forma assíncrona (IndexedDB e Nuvem)
+  const flushPendingSave = useCallback(async (): Promise<void> => {
     if (saveTimeoutRef.current) {
       clearTimeout(saveTimeoutRef.current);
       saveTimeoutRef.current = null;
     }
     const pending = pendingSaveRef.current;
     if (pending && !isRestoringRef.current) {
-      const cfiToSave = pending.cfi || book.epubLocationCfi;
-      updateBookProgress(
-        book.id,
-        book.currentChapterIndex,
-        book.currentParagraphIndex,
-        pending.progress,
-        cfiToSave
-      ).catch(err => {
-        console.warn('Erro ao descarregar progresso pendente:', err);
-      });
+      const cfiToSave = pending.cfi || currentCfiRef.current || book.epubLocationCfi;
+      try {
+        await updateBookProgress(
+          book.id,
+          book.currentChapterIndex,
+          book.currentParagraphIndex,
+          pending.progress,
+          cfiToSave
+        );
+      } catch (err) {
+        console.warn('Erro ao descarregar progresso pendente no IndexedDB:', err);
+      }
+
+      // Sincroniza imediatamente com a nuvem Firebase se o usuário estiver autenticado
+      if (auth.currentUser) {
+        syncProgressToCloud(
+          auth.currentUser.uid,
+          book.id,
+          book.currentChapterIndex,
+          book.currentParagraphIndex,
+          pending.progress,
+          cfiToSave
+        ).catch(err => {
+          console.warn('Erro ao sincronizar progresso com a nuvem:', err);
+        });
+      }
+
       book.progressPercent = pending.progress;
       if (cfiToSave) {
         book.epubLocationCfi = cfiToSave;
       }
     }
   }, [book]);
+
+  // Salvar manual da posição atual acionado pelo usuário
+  const handleManualSave = useCallback(async () => {
+    if (saveStatus === 'saving') return;
+    setSaveStatus('saving');
+    try {
+      await flushPendingSave();
+      setSaveStatus('saved');
+      if (saveStatusTimerRef.current) {
+        clearTimeout(saveStatusTimerRef.current);
+      }
+      saveStatusTimerRef.current = setTimeout(() => {
+        setSaveStatus('idle');
+      }, 2000);
+    } catch {
+      setSaveStatus('idle');
+    }
+  }, [flushPendingSave, saveStatus]);
 
   // Inicia a sessão de leitura assim que o livro e a restauração de posição estiverem prontos
   const startReadingSession = useCallback((initialProgress: number, initialCfi?: string) => {
@@ -258,7 +296,7 @@ export const EpubReaderView: React.FC<EpubReaderViewProps> = ({
 
     // Regra: endProgress e endCfi usam o último progresso e CFI válidos conhecidos pelo leitor
     const endProgress = pendingSaveRef.current?.progress ?? lastValidProgressRef.current ?? book.progressPercent ?? 0;
-    const endCfi = pendingSaveRef.current?.cfi || currentCfi || book.epubLocationCfi || undefined;
+    const endCfi = pendingSaveRef.current?.cfi || currentCfiRef.current || book.epubLocationCfi || undefined;
 
     const session: ReadingSession = {
       id: 'session_' + startedAt + '_' + Math.random().toString(36).substring(2, 9),
@@ -275,13 +313,19 @@ export const EpubReaderView: React.FC<EpubReaderViewProps> = ({
     saveReadingSession(session).catch(err => {
       console.warn('Erro ao salvar sessão de leitura:', err);
     });
-  }, [book.id, book.progressPercent, book.epubLocationCfi, currentCfi]);
+  }, [book.id, book.progressPercent, book.epubLocationCfi]);
 
-  const handleBackToLibrary = useCallback(() => {
-    flushPendingSave();
+  const handleBackToLibrary = useCallback(async () => {
+    await flushPendingSave();
     endReadingSession();
     onBackToLibrary();
   }, [flushPendingSave, endReadingSession, onBackToLibrary]);
+
+  const handleFallbackToDefaultReader = useCallback(async () => {
+    await flushPendingSave();
+    endReadingSession();
+    onFallbackToDefaultReader();
+  }, [flushPendingSave, endReadingSession, onFallbackToDefaultReader]);
 
   useEffect(() => {
     let isMounted = true;
@@ -333,11 +377,19 @@ export const EpubReaderView: React.FC<EpubReaderViewProps> = ({
           const detail = e.detail;
           if (!detail) return;
 
+          // Protege o registro de posição: enquanto o livro estiver no processo inicial
+          // de abertura e restauração (executando open e goTo), NÃO processa o relocate
+          // transitório do layout inicial (seção 0) para não contaminar o CFI salvo.
+          if (isRestoringRef.current) {
+            return;
+          }
+
           // Gera o CFI canônico de ponto a partir do início visível usando foliate-js/epubcfi.js
           const cfiResult = generateCfiFromRelocate(detail, viewElement);
           const locationCfi = cfiResult?.cfi || null;
 
           if (locationCfi) {
+            currentCfiRef.current = locationCfi;
             setCurrentCfi(locationCfi);
           }
 
@@ -364,12 +416,6 @@ export const EpubReaderView: React.FC<EpubReaderViewProps> = ({
 
           // Registra posição atual como candidata a salvar
           pendingSaveRef.current = { cfi: locationCfi, progress: globalPercent };
-
-          // Se ainda estamos no processo inicial de abertura e restauração,
-          // NÃO persistir no IndexedDB para evitar sobrescrever o CFI com a posição inicial (ex.: página 0)
-          if (isRestoringRef.current) {
-            return;
-          }
 
           // Se a restauração do CFI falhou e o usuário ainda não navegou,
           // NÃO grava a posição inicial de fallback sobre o CFI antigo
@@ -419,6 +465,8 @@ export const EpubReaderView: React.FC<EpubReaderViewProps> = ({
 
           try {
             await viewElement.goTo(savedCfi.trim());
+            currentCfiRef.current = savedCfi.trim();
+            pendingSaveRef.current = { cfi: savedCfi.trim(), progress: book.progressPercent ?? 0 };
           } catch (restoreErr) {
             restorationFailed = true;
             console.warn('Não foi possível restaurar a posição salva via CFI no Foliate.js. Abrindo no início:', restoreErr);
@@ -451,7 +499,7 @@ export const EpubReaderView: React.FC<EpubReaderViewProps> = ({
         if (isMounted) {
           setIsLoading(false);
           const initialProg = lastValidProgressRef.current ?? book.progressPercent ?? 0;
-          const initialCfi = currentCfi || book.epubLocationCfi || undefined;
+          const initialCfi = currentCfiRef.current || book.epubLocationCfi || undefined;
           startReadingSession(initialProg, initialCfi);
         }
       } catch (err: any) {
@@ -518,7 +566,7 @@ export const EpubReaderView: React.FC<EpubReaderViewProps> = ({
         containerRef.current.innerHTML = '';
       }
     };
-  }, [book.id, book.progressPercent, book.epubLocationCfi, currentCfi, flushPendingSave, startReadingSession, endReadingSession]);
+  }, [book.id, book.progressPercent, book.epubLocationCfi, flushPendingSave, startReadingSession, endReadingSession]);
 
   // Navegação entre páginas
   const handleNext = () => {
@@ -581,19 +629,45 @@ export const EpubReaderView: React.FC<EpubReaderViewProps> = ({
           </p>
         </div>
 
-        {/* Botão de Fallback para o Leitor Padrão */}
+        {/* Botões de Ação do Cabeçalho */}
         <div className="flex items-center gap-2">
+          {/* Botão Salvar onde parei */}
           <button
-            onClick={() => {
-              flushPendingSave();
-              endReadingSession();
-              onFallbackToDefaultReader();
-            }}
+            onClick={handleManualSave}
+            disabled={isLoading || errorMessage !== null || saveStatus === 'saving'}
+            className={`inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border transition-all duration-200 font-sans cursor-pointer shadow-xs ${
+              saveStatus === 'saved'
+                ? 'bg-emerald-100 border-emerald-400 text-emerald-950 font-semibold'
+                : 'bg-amber-100 hover:bg-amber-200 border-amber-300 text-amber-950 font-semibold'
+            }`}
+            title="Salvar onde parei de ler (grava no banco de dados local e nuvem)"
+          >
+            {saveStatus === 'saving' ? (
+              <>
+                <Loader2 className="w-3.5 h-3.5 text-amber-800 animate-spin" />
+                <span className="font-semibold hidden sm:inline">Salvando...</span>
+              </>
+            ) : saveStatus === 'saved' ? (
+              <>
+                <Check className="w-3.5 h-3.5 text-emerald-700 stroke-[2.5]" />
+                <span className="font-bold text-emerald-800">Posição salva!</span>
+              </>
+            ) : (
+              <>
+                <Bookmark className="w-3.5 h-3.5 text-amber-800 fill-amber-700/20" />
+                <span className="font-semibold">Salvar onde parei</span>
+              </>
+            )}
+          </button>
+
+          {/* Botão de Fallback para o Leitor Padrão */}
+          <button
+            onClick={handleFallbackToDefaultReader}
             className="inline-flex items-center gap-1.5 text-xs text-stone-600 hover:text-stone-900 hover:bg-stone-200/60 px-2.5 py-1.5 rounded-lg border border-stone-200/80 transition-colors font-sans cursor-pointer shadow-2xs"
             title="Alternar para o Leitor Clássico do AuraBooks"
           >
             <RotateCcw className="w-3.5 h-3.5 text-stone-500" />
-            <span className="hidden sm:inline font-medium">Leitor Clássico</span>
+            <span className="hidden md:inline font-medium">Leitor Clássico</span>
           </button>
         </div>
       </header>
@@ -650,11 +724,7 @@ export const EpubReaderView: React.FC<EpubReaderViewProps> = ({
                 </p>
               </div>
               <button
-                onClick={() => {
-                  flushPendingSave();
-                  endReadingSession();
-                  onFallbackToDefaultReader();
-                }}
+                onClick={handleFallbackToDefaultReader}
                 className="px-5 py-2.5 bg-stone-950 hover:bg-stone-800 text-white rounded-xl text-xs font-semibold font-sans shadow-sm transition-colors flex items-center gap-2 cursor-pointer"
               >
                 <RotateCcw className="w-4 h-4 text-amber-300" />
@@ -678,6 +748,30 @@ export const EpubReaderView: React.FC<EpubReaderViewProps> = ({
             <span className="truncate max-w-[280px]">
               {currentSectionTitle || book.title}
             </span>
+            <span aria-hidden="true" className="hidden sm:inline">·</span>
+            {/* Quick Save in Footer */}
+            <button
+              onClick={handleManualSave}
+              disabled={isLoading || errorMessage !== null || saveStatus === 'saving'}
+              className={`inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded transition-colors cursor-pointer border ${
+                saveStatus === 'saved'
+                  ? 'bg-emerald-100 text-emerald-900 border-emerald-300 font-bold'
+                  : 'bg-stone-100 text-stone-700 hover:text-stone-950 border-stone-200 hover:bg-stone-200'
+              }`}
+              title="Salvar onde parei de ler"
+            >
+              {saveStatus === 'saved' ? (
+                <>
+                  <Check className="w-3 h-3 text-emerald-700" />
+                  <span>Salvo!</span>
+                </>
+              ) : (
+                <>
+                  <Bookmark className="w-3 h-3 text-amber-800" />
+                  <span>Salvar posição</span>
+                </>
+              )}
+            </button>
           </div>
 
           {/* Botões de Navegação no Rodapé */}

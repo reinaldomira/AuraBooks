@@ -1,18 +1,19 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { 
   ArrowLeft, List, Palette, Sliders, Volume2, 
   ChevronLeft, ChevronRight, Bookmark, Heart, 
   Sparkles, Check, Play, Pause, Headphones, Clock, X,
   Maximize2, Minimize2, Type, MessageSquare,
   Globe, Quote, Download, Sun, Moon, BookOpen,
-  BookMarked, Edit3, Copy, Trash2, BookA
+  BookMarked, Edit3, Copy, Trash2, BookA, Loader2
 } from 'lucide-react';
 import { Book, ReaderSettings, BookHighlight, HighlightColor } from '../types/book';
 import { useAudioReader } from '../context/AudioReaderContext';
 import { AudioControlBar } from './AudioControlBar';
 import { NotesDrawer } from './NotesDrawer';
 import { DictionaryModal } from './DictionaryModal';
-import { getHighlights, saveHighlight, deleteHighlight } from '../services/storageService';
+import { getHighlights, saveHighlight, deleteHighlight, updateBookProgress } from '../services/storageService';
+import { auth, syncProgressToCloud } from '../services/firebase';
 import { sanitizeWord } from '../services/dictionaryService';
 import confetti from 'canvas-confetti';
 
@@ -55,6 +56,8 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   const [layoutMode, setLayoutMode] = useState<'double' | 'single' | 'full'>('double');
   const [showAudioBar, setShowAudioBar] = useState(false);
   const [activeBookmark, setActiveBookmark] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
+  const saveStatusTimerRef = useRef<NodeJS.Timeout | null>(null);
   
   // Current spread/page index inside the current chapter
   const [pageInChapter, setPageInChapter] = useState(0);
@@ -101,6 +104,18 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   const parasPerSpread = layoutMode === 'double' ? PARAGRAPHS_PER_PAGE * 2 : PARAGRAPHS_PER_PAGE;
   const totalSpreadsInChapter = Math.max(1, Math.ceil(paragraphs.length / parasPerSpread));
 
+  // Restaura o spread/página inicial com base no currentParagraphIndex salvo no livro
+  const hasRestoredInitialPage = useRef(false);
+  useEffect(() => {
+    if (!hasRestoredInitialPage.current && book.currentParagraphIndex && book.currentParagraphIndex > 0) {
+      const targetSpread = Math.floor(book.currentParagraphIndex / parasPerSpread);
+      if (targetSpread < totalSpreadsInChapter) {
+        setPageInChapter(targetSpread);
+      }
+      hasRestoredInitialPage.current = true;
+    }
+  }, [book.currentParagraphIndex, parasPerSpread, totalSpreadsInChapter]);
+
   // Compute total book pages across all chapters
   const chapterPagesCount = useMemo(() => {
     return book.chapters.map(ch => Math.max(1, Math.ceil(ch.paragraphs.length / PARAGRAPHS_PER_PAGE)));
@@ -122,6 +137,74 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
 
   const rightPageNum = Math.min(totalBookPages, currentPageNum + 1);
   const overallProgress = Math.min(100, Math.round((currentPageNum / totalBookPages) * 100));
+
+  // Salvar manual da posição atual acionado pelo usuário
+  const handleSaveCurrentPosition = useCallback(async () => {
+    if (saveStatus === 'saving') return;
+    setSaveStatus('saving');
+    try {
+      const paraIdx = pageInChapter * parasPerSpread;
+      const progress = Math.min(100, Math.round((currentPageNum / totalBookPages) * 100));
+
+      await updateBookProgress(book.id, chapterIndex, paraIdx, progress);
+
+      if (auth.currentUser) {
+        syncProgressToCloud(auth.currentUser.uid, book.id, chapterIndex, paraIdx, progress).catch(err => {
+          console.warn('Erro ao sincronizar progresso com a nuvem:', err);
+        });
+      }
+
+      book.currentChapterIndex = chapterIndex;
+      book.currentParagraphIndex = paraIdx;
+      book.progressPercent = progress;
+
+      setSaveStatus('saved');
+      if (saveStatusTimerRef.current) {
+        clearTimeout(saveStatusTimerRef.current);
+      }
+      saveStatusTimerRef.current = setTimeout(() => {
+        setSaveStatus('idle');
+      }, 2000);
+    } catch (err) {
+      console.warn('Erro ao salvar posição:', err);
+      setSaveStatus('idle');
+    }
+  }, [book, chapterIndex, pageInChapter, parasPerSpread, currentPageNum, totalBookPages, saveStatus]);
+
+  // Auto-save com debounce de 600ms ao virar de página
+  const autoSaveTimerRef = useRef<NodeJS.Timeout | null>(null);
+  useEffect(() => {
+    if (autoSaveTimerRef.current) {
+      clearTimeout(autoSaveTimerRef.current);
+    }
+    autoSaveTimerRef.current = setTimeout(() => {
+      const paraIdx = pageInChapter * parasPerSpread;
+      const progress = Math.min(100, Math.round((currentPageNum / totalBookPages) * 100));
+      updateBookProgress(book.id, chapterIndex, paraIdx, progress).catch(() => {});
+      book.currentChapterIndex = chapterIndex;
+      book.currentParagraphIndex = paraIdx;
+      book.progressPercent = progress;
+    }, 600);
+
+    return () => {
+      if (autoSaveTimerRef.current) {
+        clearTimeout(autoSaveTimerRef.current);
+      }
+    };
+  }, [chapterIndex, pageInChapter, parasPerSpread, currentPageNum, totalBookPages, book]);
+
+  // Salvar e voltar à biblioteca
+  const handleBackToLibrary = useCallback(async () => {
+    const paraIdx = pageInChapter * parasPerSpread;
+    const progress = Math.min(100, Math.round((currentPageNum / totalBookPages) * 100));
+    try {
+      await updateBookProgress(book.id, chapterIndex, paraIdx, progress);
+      if (auth.currentUser) {
+        await syncProgressToCloud(auth.currentUser.uid, book.id, chapterIndex, paraIdx, progress);
+      }
+    } catch {}
+    onBackToLibrary();
+  }, [book.id, chapterIndex, pageInChapter, parasPerSpread, currentPageNum, totalBookPages, onBackToLibrary]);
 
   // Paragraphs for Left Page and Right Page
   const startParaIdx = pageInChapter * parasPerSpread;
@@ -442,7 +525,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
       <header className="sticky top-0 z-40 bg-[#F9F8F5]/95 backdrop-blur-md border-b border-[#E8E2D9] px-4 sm:px-8 h-14 flex items-center justify-between gap-4">
         {/* Left: Back to Library */}
         <button
-          onClick={onBackToLibrary}
+          onClick={handleBackToLibrary}
           className="inline-flex items-center gap-2 text-xs font-semibold text-stone-700 hover:text-stone-950 px-2.5 py-1.5 rounded-lg hover:bg-stone-200/50 transition-colors font-sans cursor-pointer"
         >
           <ArrowLeft className="w-4 h-4" />
@@ -521,14 +604,33 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
             </span>
           </button>
 
+          {/* Botão Salvar onde parei */}
           <button
-            onClick={() => setActiveBookmark(!activeBookmark)}
-            className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg transition-colors font-sans cursor-pointer ${
-              activeBookmark ? 'text-[#9A3412] bg-amber-50 font-semibold' : 'text-stone-600 hover:text-stone-900 hover:bg-stone-100'
+            onClick={handleSaveCurrentPosition}
+            disabled={saveStatus === 'saving'}
+            className={`inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border transition-all duration-200 font-sans cursor-pointer shadow-xs ${
+              saveStatus === 'saved'
+                ? 'bg-emerald-100 border-emerald-400 text-emerald-950 font-semibold'
+                : 'bg-amber-100 hover:bg-amber-200 border-amber-300 text-amber-950 font-semibold'
             }`}
+            title="Salvar onde parei de ler (grava no banco de dados local e nuvem)"
           >
-            <Bookmark className={`w-3.5 h-3.5 ${activeBookmark ? 'fill-current' : ''}`} />
-            <span className="hidden sm:inline">Marcar</span>
+            {saveStatus === 'saving' ? (
+              <>
+                <Loader2 className="w-3.5 h-3.5 text-amber-800 animate-spin" />
+                <span className="font-semibold hidden sm:inline">Salvando...</span>
+              </>
+            ) : saveStatus === 'saved' ? (
+              <>
+                <Check className="w-3.5 h-3.5 text-emerald-700 stroke-[2.5]" />
+                <span className="font-bold text-emerald-800">Posição salva!</span>
+              </>
+            ) : (
+              <>
+                <Bookmark className="w-3.5 h-3.5 text-amber-800 fill-amber-700/20" />
+                <span className="font-semibold">Salvar onde parei</span>
+              </>
+            )}
           </button>
 
           <button
@@ -852,6 +954,30 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
             <span className="text-stone-500 hidden sm:inline">
               Capítulo {chapterIndex + 1}/{book.chapters.length}
             </span>
+            <span aria-hidden="true" className="hidden sm:inline">·</span>
+            {/* Quick Save in Footer */}
+            <button
+              onClick={handleSaveCurrentPosition}
+              disabled={saveStatus === 'saving'}
+              className={`inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded transition-colors cursor-pointer border ${
+                saveStatus === 'saved'
+                  ? 'bg-emerald-100 text-emerald-900 border-emerald-300 font-bold'
+                  : 'bg-stone-100 text-stone-700 hover:text-stone-950 border-stone-200 hover:bg-stone-200'
+              }`}
+              title="Salvar onde parei de ler"
+            >
+              {saveStatus === 'saved' ? (
+                <>
+                  <Check className="w-3 h-3 text-emerald-700" />
+                  <span>Salvo!</span>
+                </>
+              ) : (
+                <>
+                  <Bookmark className="w-3 h-3 text-amber-800" />
+                  <span>Salvar posição</span>
+                </>
+              )}
+            </button>
           </div>
 
           {/* Center: Flip Page Buttons & Interactive Page Scrubber Slider */}
