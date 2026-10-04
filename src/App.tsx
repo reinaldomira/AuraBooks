@@ -22,6 +22,7 @@ import { ReaderView } from './components/ReaderView';
 import { EpubReaderView } from './components/EpubReaderView';
 import { UploadModal } from './components/UploadModal';
 import { MiniAudioPlayer } from './components/MiniAudioPlayer';
+import { InstallAppModal } from './components/InstallAppModal';
 import { deleteOriginalEpub, hasOriginalEpub, saveOriginalEpub } from './services/epubStorageService';
 import { deleteBookFromCloud, downloadBookFileFromCloud } from './services/firebase';
 
@@ -31,6 +32,7 @@ const AppContent: React.FC = () => {
   const [selectedBook, setSelectedBook] = useState<Book | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [isUploadOpen, setIsUploadOpen] = useState(false);
+  const [isInstallModalOpen, setIsInstallModalOpen] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isOpeningCloudBook, setIsOpeningCloudBook] = useState(false);
@@ -245,6 +247,7 @@ const AppContent: React.FC = () => {
         currentView={currentView}
         onNavigate={handleNavigate}
         onOpenUpload={() => setIsUploadOpen(true)}
+        onOpenInstallModal={() => setIsInstallModalOpen(true)}
       />
 
       {/* Mobile Drawer Navigation */}
@@ -261,6 +264,10 @@ const AppContent: React.FC = () => {
                 setIsUploadOpen(true);
                 setIsMobileMenuOpen(false);
               }}
+              onOpenInstallModal={() => {
+                setIsInstallModalOpen(true);
+                setIsMobileMenuOpen(false);
+              }}
             />
           </div>
           <div className="flex-1" onClick={() => setIsMobileMenuOpen(false)} />
@@ -274,6 +281,7 @@ const AppContent: React.FC = () => {
           onSearchChange={setSearchQuery}
           onToggleMobileMenu={() => setIsMobileMenuOpen(true)}
           onNavigate={handleNavigate}
+          onOpenInstallModal={() => setIsInstallModalOpen(true)}
         />
 
         {/* View Router */}
@@ -335,6 +343,12 @@ const AppContent: React.FC = () => {
         isOpen={isUploadOpen}
         onClose={() => setIsUploadOpen(false)}
         onBookImported={handleBookImported}
+      />
+
+      {/* Install Mobile App / APK Modal */}
+      <InstallAppModal
+        isOpen={isInstallModalOpen}
+        onClose={() => setIsInstallModalOpen(false)}
       />
 
       {/* Cloud Book Download Overlay */}

@@ -1,7 +1,8 @@
 import React from 'react';
 import { 
   BookOpen, Compass, FileText, BookMarked, 
-  Layers, Sparkles, Upload, Bookmark, BookOpenText 
+  Layers, Sparkles, Upload, Bookmark, BookOpenText,
+  Smartphone 
 } from 'lucide-react';
 
 export type AppView = 'library' | 'explore' | 'detail' | 'reader';
@@ -10,12 +11,14 @@ interface SidebarProps {
   currentView: AppView;
   onNavigate: (view: AppView) => void;
   onOpenUpload: () => void;
+  onOpenInstallModal?: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
   currentView,
   onNavigate,
   onOpenUpload,
+  onOpenInstallModal,
 }) => {
   return (
     <aside className="w-64 bg-[#F9F8F5] border-r border-[#EBE6DF] flex flex-col justify-between p-5 shrink-0 hidden md:flex min-h-screen sticky top-0 h-screen select-none">
@@ -123,6 +126,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <Upload className="w-3.5 h-3.5 text-amber-300" />
           <span>Importar Livro (EPUB/PDF)</span>
         </button>
+
+        {onOpenInstallModal && (
+          <button
+            onClick={onOpenInstallModal}
+            className="w-full py-2 px-3 bg-amber-50 hover:bg-amber-100 border border-amber-300/80 text-amber-950 rounded-lg text-xs font-semibold transition-all flex items-center justify-between shadow-2xs cursor-pointer"
+            title="Instalar aplicativo no celular ou baixar APK"
+          >
+            <div className="flex items-center gap-2">
+              <Smartphone className="w-3.5 h-3.5 text-amber-800" />
+              <span>Instalar no Celular</span>
+            </div>
+            <span className="text-[9px] font-bold bg-amber-200/80 text-amber-900 px-1.5 py-0.2 rounded uppercase">
+              APK
+            </span>
+          </button>
+        )}
       </div>
     </aside>
   );

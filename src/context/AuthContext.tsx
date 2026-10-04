@@ -172,7 +172,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     });
 
-    return () => unsubscribe();
+    // Sincroniza automaticamente quando o app volta ao foco (ex: leu no celular e voltou para o PC)
+    const handleSyncOnResume = () => {
+      if (document.visibilityState === 'visible' && auth.currentUser) {
+        syncAll();
+      }
+    };
+
+    window.addEventListener('focus', handleSyncOnResume);
+    document.addEventListener('visibilitychange', handleSyncOnResume);
+
+    return () => {
+      unsubscribe();
+      window.removeEventListener('focus', handleSyncOnResume);
+      document.removeEventListener('visibilitychange', handleSyncOnResume);
+    };
   }, [syncAll]);
 
   const login = async () => {

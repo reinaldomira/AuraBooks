@@ -1,7 +1,7 @@
 import React from 'react';
 import { 
   Search, Sun, Moon, Bell, Sparkles, Cloud, 
-  Menu, LogIn, LogOut, CheckCircle2, RefreshCw 
+  Menu, LogIn, LogOut, CheckCircle2, RefreshCw, Smartphone 
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { AppView } from './Sidebar';
@@ -11,6 +11,7 @@ interface TopNavbarProps {
   onSearchChange: (q: string) => void;
   onToggleMobileMenu: () => void;
   onNavigate: (view: AppView) => void;
+  onOpenInstallModal?: () => void;
 }
 
 export const TopNavbar: React.FC<TopNavbarProps> = ({
@@ -18,6 +19,7 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
   onSearchChange,
   onToggleMobileMenu,
   onNavigate,
+  onOpenInstallModal,
 }) => {
   const { user, login, logout, isSyncing, syncMessage, syncAll } = useAuth();
 
@@ -67,6 +69,19 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
             <Moon className="w-3.5 h-3.5" />
           </button>
         </div>
+
+        {/* Botão Instalar App no Celular */}
+        {onOpenInstallModal && (
+          <button
+            onClick={onOpenInstallModal}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 border border-amber-300/80 text-amber-950 text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
+            title="Instalar no celular / Baixar APK"
+          >
+            <Smartphone className="w-3.5 h-3.5 text-amber-800" />
+            <span className="hidden sm:inline">App Celular</span>
+            <span className="text-[9px] bg-amber-200/90 text-amber-950 font-bold px-1 py-0.2 rounded">APK</span>
+          </button>
+        )}
 
         {/* Notifications */}
         <button 

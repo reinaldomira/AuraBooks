@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1C1917"/>
+      <stop offset="50%" stop-color="#292524"/>
+      <stop offset="100%" stop-color="#0C0A09"/>
+    </linearGradient>
+    <linearGradient id="goldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FDE68A"/>
+      <stop offset="40%" stop-color="#F59E0B"/>
+      <stop offset="100%" stop-color="#B45309"/>
+    </linearGradient>
+    <linearGradient id="pageGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="100%" stop-color="#E7E5E4"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="8" stdDeviation="16" flood-color="#000000" flood-opacity="0.45"/>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="512" height="512" rx="112" fill="url(#bgGrad)"/>
+  <rect width="504" height="504" x="4" y="4" rx="108" fill="none" stroke="url(#goldGrad)" stroke-width="4" stroke-opacity="0.4"/>
+
+  <!-- Glowing Aura / Halo -->
+  <circle cx="256" cy="245" r="140" fill="#F59E0B" opacity="0.12" filter="blur(28px)"/>
+
+  <!-- Central Open Book Graphic -->
+  <g filter="url(#shadow)" transform="translate(256, 252)">
+    <!-- Book Spine Glow -->
+    <path d="M 0,-60 L 0,85" stroke="url(#goldGrad)" stroke-width="6" stroke-linecap="round"/>
+
+    <!-- Left Book Page -->
+    <path d="M 0,-50 C -45,-75 -115,-75 -165,-55 C -172,-52 -176,-44 -176,-36 L -176,64 C -176,73 -170,80 -162,77 C -115,58 -52,58 0,80 Z" 
+          fill="url(#pageGrad)"/>
+    <!-- Left Page Texture / Border -->
+    <path d="M 0,-40 C -42,-62 -108,-62 -155,-44 L -155,54 C -108,38 -45,38 0,58 Z" 
+          fill="none" stroke="#D6D3D1" stroke-width="2" stroke-dasharray="4,6" opacity="0.6"/>
+
+    <!-- Right Book Page -->
+    <path d="M 0,-50 C 45,-75 115,-75 165,-55 C 172,-52 176,-44 176,-36 L 176,64 C 176,73 170,80 162,77 C 115,58 52,58 0,80 Z" 
+          fill="url(#pageGrad)"/>
+    <!-- Right Page Texture / Border -->
+    <path d="M 0,-40 C 42,-62 108,-62 155,-44 L 155,54 C 108,38 45,38 0,58 Z" 
+          fill="none" stroke="#D6D3D1" stroke-width="2" stroke-dasharray="4,6" opacity="0.6"/>
+
+    <!-- Bookmark Ribbon Ribbon in Gold -->
+    <path d="M -6,-55 L 6,-55 L 6,110 L 0,98 L -6,110 Z" fill="url(#goldGrad)"/>
+
+    <!-- Golden Reading Sparkle / Star on top -->
+    <path d="M 0,-115 Q 0,-92 18,-92 Q 0,-92 0,-70 Q 0,-92 -18,-92 Q 0,-92 0,-115 Z" fill="url(#goldGrad)"/>
+    <circle cx="0" cy="-92" r="3" fill="#FFFBEB"/>
+  </g>
+
+  <!-- Brand Typography -->
+  <text x="256" y="420" font-family="'Cinzel', 'Playfair Display', serif" font-size="34" font-weight="700" fill="url(#goldGrad)" text-anchor="middle" letter-spacing="4">AURABOOKS</text>
+  <text x="256" y="450" font-family="'Plus Jakarta Sans', sans-serif" font-size="14" font-weight="600" fill="#A8A29E" text-anchor="middle" letter-spacing="6">LEITOR &amp; NUVEM</text>
+</svg>
