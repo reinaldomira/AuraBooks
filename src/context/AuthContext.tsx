@@ -1,10 +1,11 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { User, onAuthStateChanged } from 'firebase/auth';
 import { 
-  auth, loginWithGoogle, logoutUser, syncBookToCloud, 
+  auth, loginWithGoogle, loginWithEmail, registerWithEmail, logoutUser, syncBookToCloud, 
   syncProgressToCloud, fetchUserBooksFromCloud, uploadBookFileToCloud,
   downloadBookFileFromCloud, deleteBookFromCloud 
 } from '../services/firebase';
+import { getRedirectResult } from 'firebase/auth';
 import { Book } from '../types/book';
 import { saveBook, getAllBooks } from '../services/storageService';
 import { getOriginalEpub, saveOriginalEpub, hasOriginalEpub } from '../services/epubStorageService';
@@ -14,7 +15,11 @@ interface AuthContextType {
   loading: boolean;
   isSyncing: boolean;
   syncMessage: string;
+  authError: string | null;
+  clearAuthError: () => void;
   login: () => Promise<void>;
+  loginWithEmailAccount: (email: string, pass: string) => Promise<boolean>;
+  registerWithEmailAccount: (email: string, pass: string, name: string) => Promise<boolean>;
   logout: () => Promise<void>;
   syncCurrentBook: (book: Book, originalFile?: Blob | File) => Promise<void>;
   syncProgress: (bookId: string, chap: number, para: number, percent: number, cfi?: string) => Promise<void>;
@@ -41,6 +46,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [loading, setLoading] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState('');
+  const [authError, setAuthError] = useState<string | null>(null);
+
+  const clearAuthError = () => setAuthError(null);
 
   // Sincronização completa bidirecional com o Firestore
   const syncAll = useCallback(async () => {
@@ -182,6 +190,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     window.addEventListener('focus', handleSyncOnResume);
     document.addEventListener('visibilitychange', handleSyncOnResume);
 
+    // Se veio de redirecionamento do Google (comum em navegadores móveis/PWA)
+    getRedirectResult(auth)
+      .then(async (result) => {
+        if (result?.user) {
+          setUser(result.user);
+          await syncAll();
+        }
+      })
+      .catch((err) => {
+        console.warn('Redirect auth result info:', err);
+      });
+
     return () => {
       unsubscribe();
       window.removeEventListener('focus', handleSyncOnResume);
@@ -191,14 +211,67 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const login = async () => {
     try {
+      setAuthError(null);
       setIsSyncing(true);
-      setSyncMessage('Entrando com o Google...');
+      setSyncMessage('Conectando com o Google...');
       const loggedUser = await loginWithGoogle();
       setUser(loggedUser);
       await syncAll();
-    } catch (err) {
+    } catch (err: any) {
       console.error('Google Sign In failed:', err);
+      const msg = err?.message || '';
+      if (msg.includes('disallowed_useragent') || msg.includes('403') || msg.includes('popup')) {
+        setAuthError('O Google restringe o login direto dentro de alguns WebViews do Android. Você pode entrar digitando seu e-mail ou ajustando o User-Agent no Android Studio.');
+      } else {
+        setAuthError('Não foi possível conectar com o Google. Tente pelo e-mail ou verifique sua conexão.');
+      }
       setIsSyncing(false);
+    }
+  };
+
+  const loginWithEmailAccount = async (email: string, pass: string): Promise<boolean> => {
+    try {
+      setAuthError(null);
+      setIsSyncing(true);
+      setSyncMessage('Entrando com e-mail...');
+      const loggedUser = await loginWithEmail(email, pass);
+      setUser(loggedUser);
+      await syncAll();
+      return true;
+    } catch (err: any) {
+      console.error('Email sign in failed:', err);
+      if (err?.code === 'auth/wrong-password' || err?.code === 'auth/invalid-credential') {
+        setAuthError('E-mail ou senha incorretos.');
+      } else if (err?.code === 'auth/user-not-found') {
+        setAuthError('Usuário não encontrado com este e-mail.');
+      } else {
+        setAuthError('Falha ao entrar com e-mail. Verifique suas credenciais.');
+      }
+      setIsSyncing(false);
+      return false;
+    }
+  };
+
+  const registerWithEmailAccount = async (email: string, pass: string, name: string): Promise<boolean> => {
+    try {
+      setAuthError(null);
+      setIsSyncing(true);
+      setSyncMessage('Criando sua conta...');
+      const loggedUser = await registerWithEmail(email, pass, name);
+      setUser(loggedUser);
+      await syncAll();
+      return true;
+    } catch (err: any) {
+      console.error('Email register failed:', err);
+      if (err?.code === 'auth/email-already-in-use') {
+        setAuthError('Este e-mail já está cadastrado. Faça login ou use outro.');
+      } else if (err?.code === 'auth/weak-password') {
+        setAuthError('A senha deve ter pelo menos 6 caracteres.');
+      } else {
+        setAuthError('Erro ao criar conta. Tente novamente.');
+      }
+      setIsSyncing(false);
+      return false;
     }
   };
 
@@ -207,6 +280,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       await logoutUser();
       setUser(null);
       setSyncMessage('');
+      setAuthError(null);
     } catch (err) {
       console.error('Logout failed:', err);
     }
@@ -262,7 +336,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         loading,
         isSyncing,
         syncMessage,
+        authError,
+        clearAuthError,
         login,
+        loginWithEmailAccount,
+        registerWithEmailAccount,
         logout,
         syncCurrentBook,
         syncProgress,

@@ -1,7 +1,8 @@
 import { initializeApp } from 'firebase/app';
 import { 
-  getAuth, GoogleAuthProvider, signInWithPopup, signOut, 
-  onAuthStateChanged, User 
+  getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, 
+  getRedirectResult, signOut, onAuthStateChanged, User,
+  signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile
 } from 'firebase/auth';
 import { 
   getFirestore, doc, getDocFromServer, collection, 
@@ -81,7 +82,33 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
 export async function loginWithGoogle(): Promise<User> {
   const provider = new GoogleAuthProvider();
   provider.setCustomParameters({ prompt: 'select_account' });
-  const result = await signInWithPopup(auth, provider);
+  try {
+    const result = await signInWithPopup(auth, provider);
+    return result.user;
+  } catch (error: any) {
+    // Se o popup for bloqueado pelo WebView ou navegador
+    if (error?.code === 'auth/popup-blocked' || error?.code === 'auth/cancelled-popup-request') {
+      await signInWithRedirect(auth, provider);
+      throw new Error('Redirecionando para login com o Google...');
+    }
+    throw error;
+  }
+}
+
+export async function loginWithEmail(email: string, pass: string): Promise<User> {
+  const result = await signInWithEmailAndPassword(auth, email, pass);
+  return result.user;
+}
+
+export async function registerWithEmail(email: string, pass: string, name: string): Promise<User> {
+  const result = await createUserWithEmailAndPassword(auth, email, pass);
+  if (name.trim()) {
+    try {
+      await updateProfile(result.user, { displayName: name.trim() });
+    } catch {
+      // Ignora erro menor de atualizar display name
+    }
+  }
   return result.user;
 }
 

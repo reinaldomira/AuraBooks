@@ -23,6 +23,7 @@ import { EpubReaderView } from './components/EpubReaderView';
 import { UploadModal } from './components/UploadModal';
 import { MiniAudioPlayer } from './components/MiniAudioPlayer';
 import { InstallAppModal } from './components/InstallAppModal';
+import { AuthModal } from './components/AuthModal';
 import { deleteOriginalEpub, hasOriginalEpub, saveOriginalEpub } from './services/epubStorageService';
 import { deleteBookFromCloud, downloadBookFileFromCloud } from './services/firebase';
 
@@ -33,6 +34,7 @@ const AppContent: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [isUploadOpen, setIsUploadOpen] = useState(false);
   const [isInstallModalOpen, setIsInstallModalOpen] = useState(false);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isOpeningCloudBook, setIsOpeningCloudBook] = useState(false);
@@ -282,6 +284,7 @@ const AppContent: React.FC = () => {
           onToggleMobileMenu={() => setIsMobileMenuOpen(true)}
           onNavigate={handleNavigate}
           onOpenInstallModal={() => setIsInstallModalOpen(true)}
+          onOpenAuthModal={() => setIsAuthModalOpen(true)}
         />
 
         {/* View Router */}
@@ -349,6 +352,12 @@ const AppContent: React.FC = () => {
       <InstallAppModal
         isOpen={isInstallModalOpen}
         onClose={() => setIsInstallModalOpen(false)}
+      />
+
+      {/* Cloud Authentication Modal */}
+      <AuthModal
+        isOpen={isAuthModalOpen}
+        onClose={() => setIsAuthModalOpen(false)}
       />
 
       {/* Cloud Book Download Overlay */}
