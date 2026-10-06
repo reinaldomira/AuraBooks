@@ -2,10 +2,11 @@ import React, { useState } from 'react';
 import { 
   ArrowLeft, BookOpen, Headphones, Share2, Bookmark, 
   Clock, CheckCircle2, Star, ThumbsUp, MessageSquare, 
-  ChevronRight, Sparkles, Layers, Quote, Trash2, AlertTriangle, Tag, Plus 
+  ChevronRight, Sparkles, Layers, Quote, Trash2, AlertTriangle, Tag, Plus, Cloud 
 } from 'lucide-react';
 import { Book } from '../types/book';
 import { useAudioReader } from '../context/AudioReaderContext';
+import { useAuth } from '../context/AuthContext';
 import { TagManagerModal } from './TagManagerModal';
 
 interface BookDetailViewProps {
@@ -31,6 +32,9 @@ export const BookDetailView: React.FC<BookDetailViewProps> = ({
 }) => {
   const [isConfirmDeleteOpen, setIsConfirmDeleteOpen] = useState(false);
   const [isTagModalOpen, setIsTagModalOpen] = useState(false);
+  const { user, isBookInCloud, syncCurrentBook, isSyncing } = useAuth();
+
+  const isCloud = !!book.syncedToCloud || (isBookInCloud ? isBookInCloud(book.id) : false);
 
   const handleConfirmDelete = () => {
     onDeleteBook(book.id);
@@ -38,7 +42,7 @@ export const BookDetailView: React.FC<BookDetailViewProps> = ({
   };
 
   return (
-    <div className="max-w-6xl mx-auto px-4 sm:px-8 py-8 space-y-10 bg-[#F9F8F5]">
+    <div className="max-w-6xl mx-auto px-3.5 sm:px-8 py-5 sm:py-8 space-y-6 sm:space-y-10 bg-[#F9F8F5] pb-28 md:pb-8">
       {/* Breadcrumb matching Screen 3 */}
       <div className="flex flex-wrap items-center justify-between gap-3 text-xs font-sans text-stone-500 border-b border-[#EBE6DF] pb-4">
         <div className="flex items-center gap-2">
@@ -108,6 +112,45 @@ export const BookDetailView: React.FC<BookDetailViewProps> = ({
                 <Clock className="w-3.5 h-3.5 text-stone-500" /> 9h 40m
               </span>
             </div>
+          </div>
+
+          {/* Cloud Sync Status Card */}
+          <div className="p-3.5 rounded-xl bg-white border border-[#E8E2D9] flex items-center justify-between gap-3 text-xs font-sans shadow-2xs">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${isCloud ? 'bg-sky-50 text-sky-700 border border-sky-200' : 'bg-stone-100 text-stone-500'}`}>
+                <Cloud className="w-4 h-4" />
+              </div>
+              <div className="min-w-0">
+                <span className="font-semibold text-stone-900 block leading-tight truncate">
+                  {isCloud ? 'Salvo na Nuvem' : 'Armazenado Localmente'}
+                </span>
+                <span className="text-[11px] text-stone-500 block truncate">
+                  {isCloud 
+                    ? (book.hasCloudFile ? 'Arquivo completo sincronizado no Firebase' : 'Metadados e progresso na nuvem') 
+                    : 'Disponível apenas neste dispositivo'}
+                </span>
+              </div>
+            </div>
+
+            {user && !isCloud && (
+              <button
+                onClick={async () => {
+                  await syncCurrentBook(book, undefined, true);
+                }}
+                disabled={isSyncing}
+                className="px-2.5 py-1.5 bg-stone-900 hover:bg-stone-800 text-white rounded-lg text-[11px] font-semibold transition-colors flex items-center gap-1 shrink-0 cursor-pointer disabled:opacity-50"
+                title="Tentar salvar este livro no Google Firebase agora"
+              >
+                <Cloud className="w-3 h-3 text-amber-300" />
+                <span>{isSyncing ? 'Sincronizando...' : 'Fazer Backup'}</span>
+              </button>
+            )}
+
+            {!user && !isCloud && (
+              <span className="text-[10px] text-amber-900 bg-amber-50 px-2 py-1 rounded border border-amber-200 font-medium">
+                Conecte a conta para salvar na nuvem
+              </span>
+            )}
           </div>
 
           {/* Action Buttons */}

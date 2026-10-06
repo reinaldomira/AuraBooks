@@ -128,7 +128,7 @@ export const ExploreView: React.FC<ExploreViewProps> = ({
   };
 
   return (
-    <div className="max-w-6xl mx-auto px-4 sm:px-8 py-8 space-y-10 bg-[#F9F8F5]">
+    <div className="max-w-6xl mx-auto px-3.5 sm:px-8 py-5 sm:py-8 space-y-6 sm:space-y-10 bg-[#F9F8F5] pb-28 md:pb-8">
       {/* 1. Header & Title */}
       <div className="space-y-4">
         <div>

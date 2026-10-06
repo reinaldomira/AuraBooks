@@ -43,6 +43,8 @@ export interface Book {
   description?: string;
   language?: string;
   epubLocationCfi?: string;
+  syncedToCloud?: boolean;
+  hasCloudFile?: boolean;
 }
 
 export type ReaderTheme = 'alabaster' | 'sepia' | 'dark' | 'mint';

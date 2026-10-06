@@ -3,6 +3,19 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <script>
+      // Suprime a notificação benigna de ResizeObserver dos motores Chromium/Safari (Foliate.js layout)
+      window.addEventListener('error', function (e) {
+        if (
+          e.message &&
+          (e.message.indexOf('ResizeObserver loop completed with undelivered notifications') !== -1 ||
+           e.message.indexOf('ResizeObserver loop limit exceeded') !== -1)
+        ) {
+          e.stopImmediatePropagation();
+          e.preventDefault();
+        }
+      });
+    </script>
     <title>Lumina Books - Biblioteca de Autores & Audiolivro</title>
     <meta name="description" content="Biblioteca literária editorial com leitor imersivo em duas páginas, organização automática de acervo em PDF e EPUB, e narração em áudio por voz natural." />
     
@@ -14,7 +27,8 @@
     <meta name="apple-mobile-web-app-title" content="LuminaBooks" />
     <meta name="application-name" content="Lumina Books" />
 
-    <!-- Icons -->
+    <!-- Icons & PWA Manifest -->
+    <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" type="image/svg+xml" href="/icon.svg" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon.png" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />

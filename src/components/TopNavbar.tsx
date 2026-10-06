@@ -23,7 +23,7 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
   onOpenInstallModal,
   onOpenAuthModal,
 }) => {
-  const { user, login, logout, isSyncing, syncMessage, syncAll } = useAuth();
+  const { user, login, logout, isSyncing, syncMessage, syncAll, isQuotaPaused } = useAuth();
   const [isMobileSearchOpen, setIsMobileSearchOpen] = useState(false);
 
   const handleLoginClick = () => {
@@ -35,15 +35,15 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
   };
 
   return (
-    <header className="sticky top-0 z-30 bg-[#F9F8F5]/95 backdrop-blur-md border-b border-[#EBE6DF]">
+    <header className="sticky top-0 z-30 bg-[#F9F8F5]/96 backdrop-blur-md border-b border-[#EBE6DF] pt-[env(safe-area-inset-top,0px)]">
       {/* Main Top Bar */}
-      <div className="px-3 sm:px-6 lg:px-8 py-2.5 sm:py-3 flex items-center justify-between gap-2 sm:gap-4">
+      <div className="px-3 sm:px-6 lg:px-8 py-2 sm:py-3 flex items-center justify-between gap-2 sm:gap-4 h-14 sm:h-16">
         {/* Left: Mobile Menu & App Branding (on mobile) or Desktop Search */}
-        <div className="flex items-center gap-2 sm:gap-3 flex-1 min-w-0">
+        <div className="flex items-center gap-1 sm:gap-3 flex-1 min-w-0">
           <button
             onClick={onToggleMobileMenu}
             aria-label="Abrir menu"
-            className="md:hidden p-2 text-stone-700 hover:text-stone-900 rounded-lg hover:bg-stone-200/60 active:scale-95 transition-all shrink-0"
+            className="md:hidden min-h-[44px] min-w-[44px] flex items-center justify-center text-stone-700 hover:text-stone-900 rounded-lg hover:bg-stone-200/60 active:scale-95 transition-all shrink-0"
           >
             <Menu className="w-5 h-5" />
           </button>
@@ -51,12 +51,12 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
           {/* Mobile Branding (Shows only on mobile to give a clean native app header) */}
           <button
             onClick={() => onNavigate('library')}
-            className="md:hidden flex items-center gap-1.5 text-left focus:outline-none shrink-0"
+            className="md:hidden flex items-center gap-1.5 text-left focus:outline-none shrink-0 py-1"
           >
-            <span className="font-serif text-base font-bold text-stone-900 tracking-tight">
+            <span className="font-serif-display text-lg font-bold text-stone-950 tracking-tight leading-none">
               Lumina
             </span>
-            <span className="text-[10px] text-amber-900 font-semibold bg-amber-100/90 px-1.5 py-0.5 rounded tracking-wide">
+            <span className="text-[9.5px] text-amber-900 font-semibold bg-amber-100/90 px-1.5 py-0.5 rounded tracking-wide leading-none">
               Books
             </span>
           </button>
@@ -75,12 +75,12 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
         </div>
 
         {/* Right Controls: Search toggle (mobile), Ambient pills, Notifications, User Profile */}
-        <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
+        <div className="flex items-center gap-1 sm:gap-2.5 shrink-0">
           {/* Mobile Search Toggle Icon */}
           <button
             onClick={() => setIsMobileSearchOpen(!isMobileSearchOpen)}
             aria-label="Buscar livros"
-            className={`md:hidden p-2 rounded-lg transition-colors ${
+            className={`md:hidden min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg transition-colors ${
               isMobileSearchOpen || searchQuery
                 ? 'bg-amber-100/80 text-amber-900'
                 : 'text-stone-600 hover:text-stone-900 hover:bg-stone-200/50'
@@ -163,24 +163,30 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
                     <button
                       onClick={() => syncAll()}
                       disabled={isSyncing}
-                      title={isSyncing ? (syncMessage || 'Sincronizando nuvem...') : 'Nuvem Ativa - Clique para sincronizar agora'}
+                      title={
+                        isSyncing 
+                          ? (syncMessage || 'Sincronizando nuvem...') 
+                          : isQuotaPaused 
+                            ? 'Modo Local Ativo: Cota diária gratuita do Firebase atingida. Seus livros estão salvos com segurança localmente.' 
+                            : 'Nuvem Ativa - Clique para sincronizar agora'
+                      }
                       className="hover:scale-110 transition-transform"
                     >
-                      <Cloud className={`w-3.5 h-3.5 ${isSyncing ? 'text-amber-500 animate-pulse' : 'text-emerald-600'}`} />
+                      <Cloud className={`w-3.5 h-3.5 ${isSyncing ? 'text-amber-500 animate-pulse' : isQuotaPaused ? 'text-amber-600' : 'text-emerald-600'}`} />
                     </button>
                   </div>
                   <span className="text-[10px] text-stone-500 block truncate max-w-[130px]">
-                    {isSyncing ? (syncMessage || 'Sincronizando...') : 'Nuvem Conectada'}
+                    {isSyncing ? (syncMessage || 'Sincronizando...') : isQuotaPaused ? 'Modo Local Ativo' : 'Nuvem Conectada'}
                   </span>
                 </div>
 
                 {/* Cloud Status Pill on Mobile */}
                 <span 
-                  className="lg:hidden p-1 text-emerald-600 cursor-pointer"
+                  className="lg:hidden p-1 cursor-pointer"
                   onClick={() => syncAll()}
-                  title={isSyncing ? 'Sincronizando...' : 'Nuvem Conectada'}
+                  title={isSyncing ? 'Sincronizando...' : isQuotaPaused ? 'Modo Local Ativo' : 'Nuvem Conectada'}
                 >
-                  <Cloud className={`w-3.5 h-3.5 ${isSyncing ? 'text-amber-500 animate-pulse' : 'text-emerald-600'}`} />
+                  <Cloud className={`w-3.5 h-3.5 ${isSyncing ? 'text-amber-500 animate-pulse' : isQuotaPaused ? 'text-amber-600' : 'text-emerald-600'}`} />
                 </span>
 
                 {/* Logout Button */}

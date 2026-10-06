@@ -604,33 +604,33 @@ export const EpubReaderView: React.FC<EpubReaderViewProps> = ({
   return (
     <div className="min-h-screen flex flex-col bg-[#F4F1EA] text-stone-900 select-text transition-colors duration-200">
       {/* 1. Header do Leitor Foliate.js (Consistente com AuraBooks) */}
-      <header className="sticky top-0 z-40 bg-[#F9F8F5]/95 backdrop-blur-md border-b border-[#E8E2D9] px-4 sm:px-8 h-14 flex items-center justify-between gap-4">
+      <header className="sticky top-0 z-40 bg-[#F9F8F5]/95 backdrop-blur-md border-b border-[#E8E2D9] px-3 sm:px-8 h-14 sm:h-16 flex items-center justify-between gap-3 pt-[env(safe-area-inset-top,0px)]">
         {/* Voltar à Biblioteca */}
         <button
           onClick={handleBackToLibrary}
-          className="inline-flex items-center gap-2 text-xs font-semibold text-stone-700 hover:text-stone-950 px-2.5 py-1.5 rounded-lg hover:bg-stone-200/50 transition-colors font-sans cursor-pointer"
+          className="inline-flex items-center gap-1.5 sm:gap-2 text-xs font-semibold text-stone-700 hover:text-stone-950 px-2 sm:px-2.5 py-1.5 rounded-lg hover:bg-stone-200/50 transition-colors font-sans cursor-pointer active:scale-95 shrink-0"
         >
           <ArrowLeft className="w-4 h-4" />
-          <span>Biblioteca</span>
+          <span className="hidden sm:inline">Biblioteca</span>
         </button>
 
         {/* Título do Livro & Seção Atual */}
-        <div className="text-center truncate px-2">
-          <div className="flex items-center justify-center gap-2">
-            <h2 className="font-serif-display font-bold text-sm sm:text-base text-stone-950 truncate leading-snug">
+        <div className="text-center truncate px-1 flex-1 min-w-0">
+          <div className="flex items-center justify-center gap-1.5 sm:gap-2">
+            <h2 className="font-serif-display font-bold text-xs sm:text-base text-stone-950 truncate leading-snug">
               {book.title}
             </h2>
-            <span className="text-[10px] uppercase font-sans font-bold px-1.5 py-0.5 rounded bg-amber-100/80 text-amber-900 border border-amber-200 shrink-0">
-              Foliate.js
+            <span className="text-[9px] sm:text-[10px] uppercase font-sans font-bold px-1.5 py-0.5 rounded bg-amber-100/80 text-amber-900 border border-amber-200 shrink-0">
+              EPUB
             </span>
           </div>
-          <p className="text-[11px] text-stone-500 font-sans truncate">
-            {currentSectionTitle || book.author} • {currentProgress}% concluído
+          <p className="text-[10px] sm:text-[11px] text-stone-500 font-sans truncate">
+            {currentSectionTitle || book.author} • {currentProgress}%
           </p>
         </div>
 
         {/* Botões de Ação do Cabeçalho */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
           {/* Botão Salvar onde parei */}
           <button
             onClick={handleManualSave}
@@ -739,7 +739,7 @@ export const EpubReaderView: React.FC<EpubReaderViewProps> = ({
       </main>
 
       {/* 3. Rodapé com Indicador de Progresso e Navegação */}
-      <footer className="sticky bottom-0 z-30 bg-[#F9F8F5]/95 backdrop-blur-md border-t border-[#E8E2D9] px-4 sm:px-8 py-3">
+      <footer className="sticky bottom-0 z-30 bg-[#F9F8F5]/95 backdrop-blur-md border-t border-[#E8E2D9] px-3 sm:px-8 py-2.5 sm:py-3 pb-[env(safe-area-inset-bottom,10px)]">
         <div className="max-w-6xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3 text-xs font-sans text-stone-600">
           {/* Indicador de Progresso */}
           <div className="flex items-center gap-3">

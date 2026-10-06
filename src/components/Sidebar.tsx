@@ -12,6 +12,7 @@ interface SidebarProps {
   onNavigate: (view: AppView) => void;
   onOpenUpload: () => void;
   onOpenInstallModal?: () => void;
+  isMobile?: boolean;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -19,9 +20,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onNavigate,
   onOpenUpload,
   onOpenInstallModal,
+  isMobile = false,
 }) => {
   return (
-    <aside className="w-64 bg-[#F9F8F5] border-r border-[#EBE6DF] flex flex-col justify-between p-5 shrink-0 hidden md:flex min-h-screen sticky top-0 h-screen select-none">
+    <aside className={`w-64 bg-[#F9F8F5] border-r border-[#EBE6DF] flex flex-col justify-between p-5 shrink-0 select-none ${
+      isMobile ? 'flex h-full min-h-full' : 'hidden md:flex min-h-screen sticky top-0 h-screen'
+    }`}>
       {/* Brand Zone */}
       <div className="space-y-8">
         <div 

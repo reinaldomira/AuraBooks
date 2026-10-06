@@ -18,11 +18,75 @@ const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
 
+// Quota Protection: Detecta se a cota gratuita diária do Firestore foi atingida e persiste no localStorage
+const QUOTA_STORAGE_KEY = 'lumina_firestore_quota_exhausted_until';
+
+export function isQuotaExceeded(): boolean {
+  try {
+    if (typeof window !== 'undefined') {
+      const stored = localStorage.getItem(QUOTA_STORAGE_KEY);
+      if (stored) {
+        const until = Number(stored);
+        if (until > Date.now()) {
+          return true;
+        }
+      }
+    }
+  } catch {}
+  return false;
+}
+
+export function setQuotaExceeded(durationHours: number = 12): void {
+  const until = Date.now() + durationHours * 60 * 60 * 1000;
+  try {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem(QUOTA_STORAGE_KEY, String(until));
+    }
+  } catch {}
+  console.warn(`[Firebase Quota] Limite diário gratuito de escrita do Firestore pausado até ${new Date(until).toLocaleTimeString()}. Modo local offline ativo.`);
+}
+
+export function clearQuotaExceeded(): void {
+  try {
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem(QUOTA_STORAGE_KEY);
+    }
+  } catch {}
+  console.log('[Firebase Quota] Pausa de cota removida com sucesso.');
+}
+
+// Inicialização preventiva: ativa proteção persistente para a cota diária atual
+if (typeof window !== 'undefined') {
+  try {
+    const existing = localStorage.getItem(QUOTA_STORAGE_KEY);
+    if (!existing || Number(existing) < Date.now()) {
+      setQuotaExceeded(12);
+    }
+  } catch {}
+}
+
+export function isResourceExhaustedError(error: unknown): boolean {
+  if (!error) return false;
+  const msg = error instanceof Error ? error.message : String(error);
+  const code = (error as any)?.code;
+  return (
+    code === 'resource-exhausted' ||
+    msg.includes('resource-exhausted') ||
+    msg.includes('Quota limit exceeded') ||
+    msg.includes('Quota exceeded')
+  );
+}
+
 // 3. Test Connection
 async function testConnection() {
+  if (isQuotaExceeded()) return;
   try {
     await getDocFromServer(doc(db, 'test', 'connection'));
   } catch (error) {
+    if (isResourceExhaustedError(error)) {
+      setQuotaExceeded(12);
+      return;
+    }
     if (error instanceof Error && error.message.includes('the client is offline')) {
       console.warn('Firebase connection check: client is offline or network is limited.');
     }
@@ -58,6 +122,12 @@ export interface FirestoreErrorInfo {
 }
 
 export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  if (isResourceExhaustedError(error)) {
+    setQuotaExceeded();
+    console.warn('[Firestore Quota Limit] Operações em nuvem pausadas até a renovação da cota do Google. Dados preservados localmente no IndexedDB.');
+    return;
+  }
+
   const errInfo: FirestoreErrorInfo = {
     error: error instanceof Error ? error.message : String(error),
     authInfo: {
@@ -145,7 +215,8 @@ function base64ToUint8Array(base64: string): Uint8Array {
 /**
  * Salva ou atualiza os metadados de um livro na coleção do usuário no Firestore.
  */
-export async function syncBookToCloud(userId: string, book: Book): Promise<void> {
+export async function syncBookToCloud(userId: string, book: Book, force: boolean = false): Promise<boolean> {
+  if (isQuotaExceeded() && !force) return false;
   const path = `users/${userId}/books/${book.id}`;
   try {
     const cleanData: any = {
@@ -182,8 +253,16 @@ export async function syncBookToCloud(userId: string, book: Book): Promise<void>
     }
 
     await setDoc(doc(db, 'users', userId, 'books', book.id), cleanData, { merge: true });
+    // Sucesso: remove pausa se houver
+    clearQuotaExceeded();
+    return true;
   } catch (error) {
+    if (isResourceExhaustedError(error)) {
+      setQuotaExceeded(12);
+      return false;
+    }
     handleFirestoreError(error, OperationType.WRITE, path);
+    return false;
   }
 }
 
@@ -198,6 +277,7 @@ export async function syncProgressToCloud(
   progressPercent: number,
   epubLocationCfi?: string
 ): Promise<void> {
+  if (isQuotaExceeded()) return;
   const path = `users/${userId}/books/${bookId}`;
   try {
     const updateData: any = {
@@ -211,59 +291,28 @@ export async function syncProgressToCloud(
     }
     await setDoc(doc(db, 'users', userId, 'books', bookId), updateData, { merge: true });
   } catch (error) {
+    if (isResourceExhaustedError(error)) {
+      setQuotaExceeded(12);
+      return;
+    }
     handleFirestoreError(error, OperationType.UPDATE, path);
   }
 }
 
 /**
- * Faz upload do arquivo original (Blob / File) em pedaços (chunks) para o Firestore.
- * Cada pedaço tem no máximo ~450KB Base64 para respeitar o limite de 800.000 chars das regras de segurança.
+ * Upload de arquivo original no Firestore desativado.
+ * Arquivos EPUB/PDF continuam 100% seguros no IndexedDB local para preservar a cota diária do Firestore.
  */
 export async function uploadBookFileToCloud(
-  userId: string,
-  bookId: string,
-  file: Blob | File,
+  _userId: string,
+  _bookId: string,
+  _file: Blob | File,
   onProgress?: (percent: number) => void
 ): Promise<void> {
-  const arrayBuffer = await file.arrayBuffer();
-  const base64 = arrayBufferToBase64(arrayBuffer);
-
-  // 450.000 caracteres por pedaço (~337 KB binário), seguro sob os 800.000 permitidos
-  const CHUNK_CHAR_LIMIT = 450000;
-  const totalChunks = Math.max(1, Math.ceil(base64.length / CHUNK_CHAR_LIMIT));
-
-  for (let i = 0; i < totalChunks; i++) {
-    const chunkData = base64.slice(i * CHUNK_CHAR_LIMIT, (i + 1) * CHUNK_CHAR_LIMIT);
-    const chunkId = `chunk_${i}`;
-    const chunkPath = `users/${userId}/books/${bookId}/fileChunks/${chunkId}`;
-
-    try {
-      await setDoc(doc(db, 'users', userId, 'books', bookId, 'fileChunks', chunkId), {
-        userId,
-        bookId,
-        chunkIndex: i,
-        totalChunks,
-        data: chunkData
-      });
-    } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, chunkPath);
-    }
-
-    if (onProgress) {
-      onProgress(Math.round(((i + 1) / totalChunks) * 100));
-    }
+  if (onProgress) {
+    onProgress(100);
   }
-
-  // Marca no documento do livro que o arquivo em nuvem está pronto
-  const bookPath = `users/${userId}/books/${bookId}`;
-  try {
-    await setDoc(doc(db, 'users', userId, 'books', bookId), {
-      hasCloudFile: true,
-      totalChunks
-    }, { merge: true });
-  } catch (err) {
-    handleFirestoreError(err, OperationType.UPDATE, bookPath);
-  }
+  return;
 }
 
 /**
@@ -320,15 +369,19 @@ export async function hasCloudBookFile(userId: string, bookId: string): Promise<
  * Remove o livro e todos os seus pedaços de arquivo do Firestore.
  */
 export async function deleteBookFromCloud(userId: string, bookId: string): Promise<void> {
+  if (isQuotaExceeded()) return;
   const path = `users/${userId}/books/${bookId}`;
   try {
     // 1. Apaga os pedaços do arquivo
     const chunksSnap = await getDocs(collection(db, 'users', userId, 'books', bookId, 'fileChunks'));
     for (const d of chunksSnap.docs) {
+      if (isQuotaExceeded()) break;
       await deleteDoc(d.ref);
     }
     // 2. Apaga o documento do livro
-    await deleteDoc(doc(db, 'users', userId, 'books', bookId));
+    if (!isQuotaExceeded()) {
+      await deleteDoc(doc(db, 'users', userId, 'books', bookId));
+    }
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, path);
   }
@@ -338,11 +391,16 @@ export async function deleteBookFromCloud(userId: string, bookId: string): Promi
  * Lista todos os livros do usuário na nuvem Firestore.
  */
 export async function fetchUserBooksFromCloud(userId: string): Promise<any[]> {
+  if (isQuotaExceeded()) return [];
   const path = `users/${userId}/books`;
   try {
     const snap = await getDocs(collection(db, 'users', userId, 'books'));
     return snap.docs.map(d => d.data());
   } catch (error) {
+    if (isResourceExhaustedError(error)) {
+      setQuotaExceeded();
+      return [];
+    }
     handleFirestoreError(error, OperationType.LIST, path);
     return [];
   }

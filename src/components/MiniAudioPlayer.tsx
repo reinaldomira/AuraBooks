@@ -23,7 +23,7 @@ export const MiniAudioPlayer: React.FC<MiniAudioPlayerProps> = ({ onOpenReader }
   const currentChapter = currentBook.chapters[chapterIndex];
 
   return (
-    <div className="fixed bottom-4 left-4 right-4 sm:left-auto sm:right-6 sm:w-96 z-40 bg-stone-900/95 backdrop-blur-md text-stone-100 rounded-2xl shadow-2xl border border-stone-700/80 p-3.5 animate-in slide-in-from-bottom-5 duration-300">
+    <div className="fixed bottom-[68px] left-3 right-3 sm:bottom-6 sm:left-auto sm:right-6 sm:w-96 z-40 bg-stone-900/95 backdrop-blur-md text-stone-100 rounded-2xl shadow-2xl border border-stone-700/80 p-3 sm:p-3.5 animate-in slide-in-from-bottom-5 duration-300">
       <div className="flex items-center gap-3">
         {/* Thumbnail */}
         <div

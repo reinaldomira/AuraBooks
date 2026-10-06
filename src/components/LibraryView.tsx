@@ -12,7 +12,7 @@ import { useAuth } from '../context/AuthContext';
 import { TagManagerModal } from './TagManagerModal';
 
 export type SortOption = 'lastRead' | 'recent' | 'oldest' | 'titleAsc' | 'titleDesc';
-export type FilterTab = 'todos' | 'lendo' | 'nao-iniciados' | 'concluidos' | 'favoritos' | string;
+export type FilterTab = 'todos' | 'lendo' | 'nao-iniciados' | 'concluidos' | 'favoritos' | 'nuvem' | string;
 
 interface LibraryViewProps {
   books: Book[];
@@ -92,7 +92,11 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   onSearchChange,
 }) => {
   const { currentBook, isPlaying, isPaused, togglePlayPause } = useAudioReader();
-  const { user, login } = useAuth();
+  const { user, login, isBookInCloud } = useAuth();
+
+  const isCloudBook = (book: Book) => {
+    return !!book.syncedToCloud || (isBookInCloud ? isBookInCloud(book.id) : false);
+  };
 
   const [selectedTab, setSelectedTab] = useState<FilterTab>('todos');
   const [sortBy, setSortBy] = useState<SortOption>('lastRead');
@@ -132,6 +136,10 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     return books.filter(b => b.isFavorite);
   }, [books]);
 
+  const cloudBooks = useMemo(() => {
+    return books.filter(isCloudBook);
+  }, [books, isBookInCloud]);
+
   // Livro para a seção "Continuar Lendo":
   // Considera estritamente livros com 0 < progressPercent < 100, ordenados por lastReadAt DESC
   const currentReadingBook = inProgressBooks[0] || null;
@@ -151,6 +159,8 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
       baseList = completedBooks;
     } else if (selectedTab === 'favoritos') {
       baseList = favoriteBooks;
+    } else if (selectedTab === 'nuvem') {
+      baseList = cloudBooks;
     } else {
       // Filtro de Coleção / Tag personalizada
       baseList = books.filter(b => b.tags && Array.isArray(b.tags) && b.tags.includes(selectedTab));
@@ -161,7 +171,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
 
     // 3º Passo: Ordenação
     return sortBooksList(afterSearch, sortBy);
-  }, [books, selectedTab, inProgressBooks, notStartedBooks, completedBooks, favoriteBooks, searchQuery, sortBy]);
+  }, [books, selectedTab, inProgressBooks, notStartedBooks, completedBooks, favoriteBooks, cloudBooks, searchQuery, sortBy]);
 
   const handleConfirmDelete = () => {
     if (bookToDelete) {
@@ -181,22 +191,22 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   };
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-8 py-8 space-y-10 bg-[#F9F8F5]">
+    <div className="max-w-7xl mx-auto px-3.5 sm:px-8 py-5 sm:py-8 space-y-6 sm:space-y-10 bg-[#F9F8F5] pb-28 md:pb-8">
       {/* 1. Daily Session Greeting Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
-        <div className="space-y-1.5">
-          <div className="flex items-center gap-2 text-[11px] uppercase tracking-wider text-stone-600 font-semibold font-sans">
-            <span className="w-2 h-2 rounded-full bg-[#9A3412] inline-block animate-pulse" />
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 sm:gap-6">
+        <div className="space-y-1 sm:space-y-1.5">
+          <div className="flex items-center gap-2 text-[10px] sm:text-[11px] uppercase tracking-wider text-stone-600 font-semibold font-sans">
+            <span className="w-2 h-2 rounded-full bg-[#9A3412] inline-block animate-pulse shrink-0" />
             <span>SESSÃO DIÁRIA ATIVA</span>
             <span aria-hidden="true">·</span>
             <span>Estante Pessoal</span>
           </div>
 
-          <h1 className="font-serif-display text-3xl sm:text-4xl lg:text-[42px] font-medium tracking-tight text-stone-950 leading-tight">
+          <h1 className="font-serif-display text-2xl sm:text-4xl lg:text-[42px] font-medium tracking-tight text-stone-950 leading-tight">
             Bem-vindo de volta, <span className="italic font-normal">{displayName}.</span>
           </h1>
 
-          <p className="text-sm text-stone-600 font-sans max-w-xl">
+          <p className="text-xs sm:text-sm text-stone-600 font-sans max-w-xl leading-relaxed">
             {books.length > 0 
               ? 'Sua biblioteca, audiolivros e coleções estão organizados. Escolha uma obra para ler, ouvir ou organizar suas anotações.'
               : 'Sua estante pessoal está pronta. Adicione seus livros em EPUB ou PDF para ler no formato editorial ou ouvir em áudio.'}
@@ -204,15 +214,15 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         </div>
 
         {/* Status card */}
-        <div className="flex items-center gap-3.5 p-3.5 px-5 bg-white rounded-2xl border border-[#E8E2D9] shadow-2xs self-start md:self-auto">
-          <div className="w-10 h-10 rounded-xl bg-amber-50 border border-amber-200/80 flex items-center justify-center text-amber-700">
-            <Flame className="w-5 h-5 fill-amber-500 text-amber-600" />
+        <div className="flex items-center gap-3 p-3 sm:p-3.5 sm:px-5 bg-white rounded-xl sm:rounded-2xl border border-[#E8E2D9] shadow-2xs self-start md:self-auto shrink-0">
+          <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-lg sm:rounded-xl bg-amber-50 border border-amber-200/80 flex items-center justify-center text-amber-700 shrink-0">
+            <Flame className="w-4 h-4 sm:w-5 sm:h-5 fill-amber-500 text-amber-600" />
           </div>
           <div>
-            <span className="text-[10px] uppercase tracking-widest text-stone-500 font-sans font-semibold block">
+            <span className="text-[9px] sm:text-[10px] uppercase tracking-widest text-stone-500 font-sans font-semibold block">
               ACERVO PESSOAL
             </span>
-            <span className="font-serif-display text-lg font-bold text-stone-950 block leading-tight">
+            <span className="font-serif-display text-base sm:text-lg font-bold text-stone-950 block leading-tight">
               {books.length} {books.length === 1 ? 'Livro' : 'Livros'}
             </span>
           </div>
@@ -221,16 +231,16 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
 
       {/* 2. Empty Library State if no books yet */}
       {books.length === 0 ? (
-        <div className="p-8 sm:p-14 bg-white rounded-3xl border border-[#E8E2D9] shadow-xs text-center space-y-6 max-w-2xl mx-auto">
-          <div className="w-16 h-16 rounded-2xl bg-[#FAF6F0] border border-[#EFE8DC] text-[#9A3412] flex items-center justify-center mx-auto shadow-2xs">
-            <BookOpen className="w-8 h-8" />
+        <div className="p-5 sm:p-14 bg-white rounded-2xl sm:rounded-3xl border border-[#E8E2D9] shadow-xs text-center space-y-4 sm:space-y-6 max-w-2xl mx-auto">
+          <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-[#FAF6F0] border border-[#EFE8DC] text-[#9A3412] flex items-center justify-center mx-auto shadow-2xs">
+            <BookOpen className="w-7 h-7 sm:w-8 sm:h-8" />
           </div>
 
-          <div className="space-y-2">
-            <h2 className="font-serif-display text-2xl sm:text-3xl font-bold text-stone-950">
+          <div className="space-y-1.5 sm:space-y-2">
+            <h2 className="font-serif-display text-xl sm:text-3xl font-bold text-stone-950">
               Sua estante está livre, {displayName}
             </h2>
-            <p className="text-sm text-stone-600 font-sans max-w-md mx-auto leading-relaxed">
+            <p className="text-xs sm:text-sm text-stone-600 font-sans max-w-md mx-auto leading-relaxed">
               Arraste e solte seus arquivos de livros em <strong>EPUB</strong> ou <strong>PDF</strong>. O aplicativo organiza os capítulos, memoriza exatamente onde você parar, oferece marca-texto com anotações e lê em voz alta com áudio natural.
             </p>
           </div>
@@ -238,23 +248,23 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
           <div className="pt-2 flex flex-col sm:flex-row items-center justify-center gap-3">
             <button
               onClick={onOpenUpload}
-              className="w-full sm:w-auto px-6 py-3 bg-stone-950 hover:bg-stone-800 text-white rounded-xl text-xs font-semibold font-sans shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer"
+              className="w-full sm:w-auto px-5 sm:px-6 py-3 bg-stone-950 hover:bg-stone-800 text-white rounded-xl text-xs sm:text-sm font-semibold font-sans shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer active:scale-95"
             >
               <Upload className="w-4 h-4 text-amber-300" />
               <span>Importar Meu Primeiro Livro (EPUB / PDF)</span>
             </button>
           </div>
 
-          <div className="pt-6 border-t border-[#F0EBE3] grid grid-cols-1 sm:grid-cols-3 gap-4 text-left">
-            <div className="p-3.5 rounded-xl bg-[#FAF6F0] border border-[#EFE8DC]">
+          <div className="pt-4 sm:pt-6 border-t border-[#F0EBE3] grid grid-cols-1 sm:grid-cols-3 gap-2.5 sm:gap-4 text-left">
+            <div className="p-3 sm:p-3.5 rounded-xl bg-[#FAF6F0] border border-[#EFE8DC]">
               <span className="font-serif-display font-bold text-xs text-stone-900 block">Marca-Texto & Notas</span>
               <p className="text-[11px] text-stone-500 font-sans mt-0.5">Destaques em cores e caderno de estudos exportável em .md.</p>
             </div>
-            <div className="p-3.5 rounded-xl bg-[#FAF6F0] border border-[#EFE8DC]">
+            <div className="p-3 sm:p-3.5 rounded-xl bg-[#FAF6F0] border border-[#EFE8DC]">
               <span className="font-serif-display font-bold text-xs text-stone-900 block">Coleções & Tags</span>
               <p className="text-[11px] text-stone-500 font-sans mt-0.5">Organize seus livros por temas como Filosofia, Estudos e Favoritos.</p>
             </div>
-            <div className="p-3.5 rounded-xl bg-[#FAF6F0] border border-[#EFE8DC]">
+            <div className="p-3 sm:p-3.5 rounded-xl bg-[#FAF6F0] border border-[#EFE8DC]">
               <span className="font-serif-display font-bold text-xs text-stone-900 block">Audiolivro TTS</span>
               <p className="text-[11px] text-stone-500 font-sans mt-0.5">Narração por voz com controle de velocidade e timer de sono.</p>
             </div>
@@ -322,11 +332,20 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                   {/* Conteúdo */}
                   <div className="flex-1 space-y-3.5 min-w-0">
                     <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-100/70 text-amber-900 border border-amber-200">
                           <span className="w-1.5 h-1.5 rounded-full bg-amber-700 inline-block animate-pulse" />
                           CONTINUAR LENDO
                         </span>
+                        {isCloudBook(currentReadingBook) && (
+                          <span 
+                            className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-sky-50 text-sky-900 border border-sky-200"
+                            title={currentReadingBook.hasCloudFile ? 'Arquivo original e leitura salvos no Firebase' : 'Sincronizado na nuvem (Google Firestore)'}
+                          >
+                            <Cloud className="w-3 h-3 text-sky-600" />
+                            <span>NA NUVEM</span>
+                          </span>
+                        )}
                         {currentReadingBook.chapters && currentReadingBook.chapters.length > 0 && (
                           <span className="text-xs text-stone-500 font-sans flex items-center gap-1">
                             <Clock className="w-3.5 h-3.5 text-stone-400" />
@@ -653,6 +672,19 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                 <span>Favoritos ({favoriteBooks.length})</span>
               </button>
 
+              {/* Na Nuvem (Firebase) */}
+              <button
+                onClick={() => setSelectedTab('nuvem')}
+                className={`px-3 py-1.5 rounded-full text-xs font-sans font-medium whitespace-nowrap transition-all cursor-pointer border flex items-center gap-1.5 ${
+                  selectedTab === 'nuvem'
+                    ? 'bg-sky-950 text-sky-100 border-sky-900 shadow-2xs font-semibold'
+                    : 'bg-white text-stone-700 border-stone-200 hover:bg-stone-100'
+                }`}
+              >
+                <Cloud className="w-3 h-3 text-sky-600" />
+                <span>Na Nuvem ({cloudBooks.length})</span>
+              </button>
+
               {/* Custom User Tags */}
               {allTags.map((tag) => {
                 const count = books.filter(b => b.tags && Array.isArray(b.tags) && b.tags.includes(tag)).length;
@@ -759,7 +791,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                 )}
               </div>
             ) : (
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-6">
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3.5 sm:gap-6">
                 {catalogFilteredAndSorted.map(book => {
                   const progress = normalizeProgress(book.progressPercent);
                   const isCompleted = progress >= 100;
@@ -769,7 +801,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                   return (
                     <div
                       key={book.id}
-                      className="group relative bg-white rounded-xl border border-[#E5E0D8] p-3 flex flex-col justify-between space-y-2.5 shadow-2xs hover:shadow-md transition-all"
+                      className="group relative bg-white rounded-xl border border-[#E5E0D8] p-2.5 sm:p-3 flex flex-col justify-between space-y-2 sm:space-y-2.5 shadow-2xs hover:shadow-md transition-all active:scale-[0.98]"
                     >
                       {/* Cover Area */}
                       <div 
@@ -784,10 +816,10 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                             className="w-full h-full object-cover group-hover:scale-103 transition-transform" 
                           />
                         ) : (
-                          <div className="w-full h-full p-4 flex flex-col justify-between bg-stone-850 text-stone-100">
-                            <span className="text-[10px] uppercase font-sans text-amber-300">{book.format.toUpperCase()}</span>
-                            <h4 className="font-serif-display font-bold text-xs">{book.title}</h4>
-                            <span className="text-[10px] text-stone-400 font-sans">{book.author}</span>
+                          <div className="w-full h-full p-3 sm:p-4 flex flex-col justify-between bg-stone-850 text-stone-100">
+                            <span className="text-[9px] sm:text-[10px] uppercase font-sans text-amber-300">{book.format.toUpperCase()}</span>
+                            <h4 className="font-serif-display font-bold text-xs line-clamp-2 leading-tight">{book.title}</h4>
+                            <span className="text-[9.5px] sm:text-[10px] text-stone-400 font-sans truncate">{book.author}</span>
                           </div>
                         )}
 
@@ -802,6 +834,24 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                         {isInProgress && (
                           <div className="absolute top-2 left-2 bg-amber-900/80 backdrop-blur-xs text-amber-200 px-1.5 py-0.5 rounded text-[9px] font-sans font-semibold shadow-xs">
                             {progress}%
+                          </div>
+                        )}
+
+                        {/* Status Badge: Na Nuvem (Firebase) */}
+                        {isCloudBook(book) ? (
+                          <div 
+                            className="absolute bottom-2 right-2 bg-stone-950/85 backdrop-blur-xs text-sky-300 border border-sky-400/30 px-1.5 py-0.5 rounded flex items-center gap-1 shadow-xs" 
+                            title={book.hasCloudFile ? 'Livro e arquivo completo sincronizados na nuvem' : 'Sincronizado na nuvem (Google Firestore)'}
+                          >
+                            <Cloud className="w-3 h-3 text-sky-400 shrink-0" />
+                            <span className="text-[9px] font-sans font-semibold text-sky-200">Nuvem</span>
+                          </div>
+                        ) : (
+                          <div 
+                            className="absolute bottom-2 right-2 bg-stone-900/60 backdrop-blur-xs text-stone-300 px-1.5 py-0.5 rounded flex items-center gap-1 text-[9px] font-sans opacity-70 group-hover:opacity-100 transition-opacity" 
+                            title="Armazenado apenas neste dispositivo"
+                          >
+                            <span>Local</span>
                           </div>
                         )}
 
@@ -821,12 +871,12 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                       {/* Metadata & Tags */}
                       <div 
                         onClick={() => onOpenDetails(book)}
-                        className="space-y-1.5 cursor-pointer"
+                        className="space-y-1 sm:space-y-1.5 cursor-pointer"
                       >
-                        <h4 className="font-serif-display font-bold text-sm text-stone-950 group-hover:text-[#9A3412] transition-colors line-clamp-1 leading-snug">
+                        <h4 className="font-serif-display font-bold text-xs sm:text-sm text-stone-950 group-hover:text-[#9A3412] transition-colors line-clamp-2 leading-snug">
                           {book.title}
                         </h4>
-                        <p className="text-xs text-stone-500 font-sans line-clamp-1">
+                        <p className="text-[11px] sm:text-xs text-stone-500 font-sans line-clamp-1">
                           {book.author}
                         </p>
 
@@ -847,8 +897,8 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                         )}
                         
                         {/* Indicador e Barra de Progresso Visual */}
-                        <div className="space-y-1 pt-1">
-                          <div className="flex items-center justify-between text-[11px] text-stone-500 font-sans">
+                        <div className="space-y-1 pt-0.5 sm:pt-1">
+                          <div className="flex items-center justify-between text-[10px] sm:text-[11px] text-stone-500 font-sans">
                             {isCompleted ? (
                               <span className="text-emerald-700 font-medium flex items-center gap-1">
                                 <Check className="w-3 h-3 text-emerald-600" />
@@ -859,7 +909,26 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                             ) : (
                               <span className="text-stone-400">Não iniciado</span>
                             )}
-                            <span className="text-stone-400 uppercase text-[10px]">{book.format}</span>
+
+                            <div className="flex items-center gap-1.5">
+                              {isCloudBook(book) ? (
+                                <span 
+                                  className="inline-flex items-center gap-0.5 text-[9.5px] font-semibold text-sky-800 bg-sky-50 px-1.5 py-0.2 rounded border border-sky-200"
+                                  title={book.hasCloudFile ? 'Arquivo completo e leitura salvos na nuvem' : 'Progresso sincronizado na nuvem'}
+                                >
+                                  <Cloud className="w-2.5 h-2.5 text-sky-600" />
+                                  <span>Nuvem</span>
+                                </span>
+                              ) : (
+                                <span 
+                                  className="text-[9px] text-stone-400 bg-stone-100 px-1.5 py-0.2 rounded"
+                                  title="Salvo apenas neste dispositivo"
+                                >
+                                  Local
+                                </span>
+                              )}
+                              <span className="text-stone-400 uppercase text-[9.5px] sm:text-[10px]">{book.format}</span>
+                            </div>
                           </div>
 
                           <div className="w-full h-1 bg-[#EBE6DF] rounded-full overflow-hidden">
@@ -874,10 +943,10 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                       </div>
 
                       {/* Action Bar (Ler, Áudio, Coleções, Excluir) */}
-                      <div className="pt-2 border-t border-stone-100 flex items-center justify-between gap-1">
+                      <div className="pt-2 border-t border-stone-100 flex items-center justify-between gap-1.5">
                         <button
                           onClick={() => onOpenBook(book)}
-                          className="flex-1 py-1.5 px-2 bg-stone-900 hover:bg-stone-800 text-white rounded text-[11px] font-semibold font-sans flex items-center justify-center gap-1 cursor-pointer transition-colors"
+                          className="flex-1 py-1.5 px-2 bg-stone-900 hover:bg-stone-800 text-white rounded-lg text-[11px] font-semibold font-sans flex items-center justify-center gap-1 cursor-pointer transition-colors active:scale-95"
                           title="Ler livro"
                         >
                           <BookOpen className="w-3 h-3 text-amber-300" />
@@ -886,7 +955,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
 
                         <button
                           onClick={() => onPlayAudiobook(book)}
-                          className="p-1.5 rounded bg-[#FAF6F0] hover:bg-[#F3ECE0] text-stone-800 border border-[#E8DFD1] transition-colors cursor-pointer"
+                          className="p-1.5 sm:p-2 rounded-lg bg-[#FAF6F0] hover:bg-[#F3ECE0] text-stone-800 border border-[#E8DFD1] transition-colors cursor-pointer active:scale-95"
                           title="Ouvir audiolivro"
                         >
                           <Headphones className="w-3.5 h-3.5 text-amber-700" />

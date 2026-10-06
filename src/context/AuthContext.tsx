@@ -3,7 +3,8 @@ import { User, onAuthStateChanged } from 'firebase/auth';
 import { 
   auth, loginWithGoogle, loginWithEmail, registerWithEmail, logoutUser, syncBookToCloud, 
   syncProgressToCloud, fetchUserBooksFromCloud, uploadBookFileToCloud,
-  downloadBookFileFromCloud, deleteBookFromCloud 
+  downloadBookFileFromCloud, deleteBookFromCloud,
+  isQuotaExceeded, setQuotaExceeded, isResourceExhaustedError
 } from '../services/firebase';
 import { getRedirectResult } from 'firebase/auth';
 import { Book } from '../types/book';
@@ -21,9 +22,12 @@ interface AuthContextType {
   loginWithEmailAccount: (email: string, pass: string) => Promise<boolean>;
   registerWithEmailAccount: (email: string, pass: string, name: string) => Promise<boolean>;
   logout: () => Promise<void>;
-  syncCurrentBook: (book: Book, originalFile?: Blob | File) => Promise<void>;
+  syncCurrentBook: (book: Book, originalFile?: Blob | File, force?: boolean) => Promise<boolean>;
   syncProgress: (bookId: string, chap: number, para: number, percent: number, cfi?: string) => Promise<void>;
   syncAll: () => Promise<void>;
+  isQuotaPaused: boolean;
+  cloudBookIds: Set<string>;
+  isBookInCloud: (bookId: string) => boolean;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -47,19 +51,39 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState('');
   const [authError, setAuthError] = useState<string | null>(null);
+  const [cloudBookIds, setCloudBookIds] = useState<Set<string>>(new Set());
 
   const clearAuthError = () => setAuthError(null);
+
+  const isBookInCloud = useCallback((bookId: string) => {
+    return cloudBookIds.has(bookId);
+  }, [cloudBookIds]);
 
   // Sincronização completa bidirecional com o Firestore
   const syncAll = useCallback(async () => {
     const currentUser = auth.currentUser;
     if (!currentUser) return;
 
+    if (isQuotaExceeded()) {
+      setSyncMessage('Modo local ativo (cota gratuita da nuvem pausada)');
+      return;
+    }
+
     try {
       setIsSyncing(true);
       setSyncMessage('Buscando livros da sua nuvem...');
 
       const cloudBooks = await fetchUserBooksFromCloud(currentUser.uid);
+      if (cloudBooks && Array.isArray(cloudBooks)) {
+        setCloudBookIds(new Set(cloudBooks.map((cb: any) => cb.bookId).filter(Boolean)));
+      }
+
+      if (isQuotaExceeded()) {
+        setSyncMessage('Modo local ativo (cota de nuvem em pausa)');
+        setIsSyncing(false);
+        return;
+      }
+
       const localBooks = await getAllBooks();
 
       // 1. Nuvem -> Local (Baixar livros e arquivos criados em outros PCs)
@@ -85,6 +109,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               lastReadAt: Math.max(cloudTimestamp, localTimestamp),
               epubLocationCfi: shouldUpdateMeta && cBook.epubLocationCfi ? cBook.epubLocationCfi : existing.epubLocationCfi,
               isFavorite: cBook.isFavorite !== undefined ? cBook.isFavorite : existing.isFavorite,
+              syncedToCloud: true,
+              hasCloudFile: !!cBook.hasCloudFile,
             };
 
             await saveBook(updatedBook);
@@ -125,6 +151,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               addedAt: cBook.addedAt || Date.now(),
               description: cBook.description || '',
               epubLocationCfi: cBook.epubLocationCfi || undefined,
+              syncedToCloud: true,
+              hasCloudFile: !!cBook.hasCloudFile,
             };
 
             await saveBook(newBook);
@@ -144,27 +172,46 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // 2. Local -> Nuvem (Backup dos livros locais que ainda não estão na nuvem)
       const currentLocalBooks = await getAllBooks();
       for (const lBook of currentLocalBooks) {
+        if (isQuotaExceeded()) {
+          setSyncMessage('Modo local ativo (cota de nuvem em pausa)');
+          break;
+        }
         const isSample = SAMPLE_IDS.includes(lBook.id) || lBook.id.startsWith('sample-');
         if (isSample) continue;
 
         const existsInCloud = cloudBooks?.some(cb => cb.bookId === lBook.id);
         if (!existsInCloud) {
-          setSyncMessage(`Enviando "${lBook.title}" para a nuvem...`);
-          await syncBookToCloud(currentUser.uid, lBook);
-
-          if (lBook.format === 'epub') {
-            const originalBlob = await getOriginalEpub(lBook.id);
-            if (originalBlob) {
-              await uploadBookFileToCloud(currentUser.uid, lBook.id, originalBlob);
+          if (!isQuotaExceeded()) {
+            setSyncMessage(`Enviando "${lBook.title}" para a nuvem...`);
+            await syncBookToCloud(currentUser.uid, lBook);
+            if (!isQuotaExceeded()) {
+              lBook.syncedToCloud = true;
+              await saveBook(lBook);
+              setCloudBookIds(prev => new Set(prev).add(lBook.id));
             }
+          }
+        } else {
+          if (!lBook.syncedToCloud) {
+            lBook.syncedToCloud = true;
+            lBook.hasCloudFile = !!cloudBooks?.find(cb => cb.bookId === lBook.id)?.hasCloudFile;
+            await saveBook(lBook);
           }
         }
       }
 
-      setSyncMessage('Nuvem conectada e sincronizada');
-    } catch (err) {
-      console.warn('Erro na sincronização da nuvem:', err);
-      setSyncMessage('Falha ao sincronizar nuvem');
+      if (isQuotaExceeded()) {
+        setSyncMessage('Modo local ativo (cota diária do Firebase em pausa)');
+      } else {
+        setSyncMessage('Nuvem conectada e sincronizada');
+      }
+    } catch (err: any) {
+      if (isResourceExhaustedError(err)) {
+        setQuotaExceeded();
+        setSyncMessage('Modo local ativo (cota diária do Firebase em pausa)');
+      } else {
+        console.warn('Erro na sincronização da nuvem:', err);
+        setSyncMessage('Modo local ativo');
+      }
     } finally {
       setIsSyncing(false);
     }
@@ -286,29 +333,41 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const syncCurrentBook = async (book: Book, originalFile?: Blob | File) => {
-    if (!user) return;
+  const syncCurrentBook = async (book: Book, originalFile?: Blob | File, force: boolean = false): Promise<boolean> => {
+    if (!user) {
+      setSyncMessage('Faça login com sua conta Google para salvar na nuvem');
+      return false;
+    }
+
+    if (isQuotaExceeded() && !force) {
+      setSyncMessage('Cota do Firebase em pausa para hoje. Livro salvo com segurança localmente.');
+      return false;
+    }
+
     try {
       setIsSyncing(true);
       setSyncMessage(`Salvando "${book.title}" na nuvem...`);
 
-      await syncBookToCloud(user.uid, book);
-
-      // Envia o arquivo original (se fornecido ou se estiver no IndexedDB)
-      let fileToUpload = originalFile;
-      if (!fileToUpload && book.format === 'epub') {
-        fileToUpload = (await getOriginalEpub(book.id)) || undefined;
+      const success = await syncBookToCloud(user.uid, book, force);
+      if (success) {
+        book.syncedToCloud = true;
+        setCloudBookIds(prev => new Set(prev).add(book.id));
+        await saveBook(book);
+        setSyncMessage('Livro salvo na nuvem com sucesso!');
+        return true;
+      } else {
+        setSyncMessage('Cota do Firebase atingida. Livro salvo com segurança localmente.');
+        return false;
       }
-
-      if (fileToUpload) {
-        setSyncMessage(`Enviando arquivo de "${book.title}"...`);
-        await uploadBookFileToCloud(user.uid, book.id, fileToUpload);
-      }
-
-      setSyncMessage('Livro salvo na nuvem com sucesso');
     } catch (err) {
-      console.warn('Falha ao sincronizar livro com a nuvem:', err);
-      setSyncMessage('Erro ao salvar livro na nuvem');
+      if (isResourceExhaustedError(err)) {
+        setQuotaExceeded(12);
+        setSyncMessage('Cota do Firebase atingida. Livro salvo com segurança localmente.');
+      } else {
+        console.warn('Falha ao sincronizar livro com a nuvem:', err);
+        setSyncMessage('Livro salvo localmente');
+      }
+      return false;
     } finally {
       setIsSyncing(false);
     }
@@ -321,11 +380,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     percent: number, 
     cfi?: string
   ) => {
-    if (!user) return;
+    if (!user || isQuotaExceeded()) return;
     try {
       await syncProgressToCloud(user.uid, bookId, chap, para, percent, cfi);
     } catch (err) {
-      console.warn('Falha ao sincronizar progresso com a nuvem:', err);
+      if (isResourceExhaustedError(err)) {
+        setQuotaExceeded();
+      } else {
+        console.warn('Falha ao sincronizar progresso com a nuvem:', err);
+      }
     }
   };
 
@@ -344,7 +407,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         logout,
         syncCurrentBook,
         syncProgress,
-        syncAll
+        syncAll,
+        isQuotaPaused: isQuotaExceeded(),
+        cloudBookIds,
+        isBookInCloud
       }}
     >
       {children}

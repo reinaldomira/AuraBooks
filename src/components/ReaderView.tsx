@@ -522,14 +522,14 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
       className={`min-h-screen flex flex-col ${theme.bg} text-stone-900 select-text transition-colors duration-200`}
     >
       {/* 1. Reader Top Navigation Header */}
-      <header className="sticky top-0 z-40 bg-[#F9F8F5]/95 backdrop-blur-md border-b border-[#E8E2D9] px-4 sm:px-8 h-14 flex items-center justify-between gap-4">
+      <header className="sticky top-0 z-40 bg-[#F9F8F5]/95 backdrop-blur-md border-b border-[#E8E2D9] px-2.5 sm:px-8 h-14 sm:h-16 flex items-center justify-between gap-2 sm:gap-4 pt-[env(safe-area-inset-top,0px)]">
         {/* Left: Back to Library */}
         <button
           onClick={handleBackToLibrary}
-          className="inline-flex items-center gap-2 text-xs font-semibold text-stone-700 hover:text-stone-950 px-2.5 py-1.5 rounded-lg hover:bg-stone-200/50 transition-colors font-sans cursor-pointer"
+          className="inline-flex items-center gap-1.5 sm:gap-2 text-xs font-semibold text-stone-700 hover:text-stone-950 px-2 sm:px-2.5 py-1.5 rounded-lg hover:bg-stone-200/50 transition-colors font-sans cursor-pointer active:scale-95 shrink-0"
         >
           <ArrowLeft className="w-4 h-4" />
-          <span>Biblioteca</span>
+          <span className="hidden sm:inline">Biblioteca</span>
         </button>
 
         {/* Center: Book Title & Chapter indicator with direct jump menu */}

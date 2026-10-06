@@ -24,6 +24,7 @@ import { UploadModal } from './components/UploadModal';
 import { MiniAudioPlayer } from './components/MiniAudioPlayer';
 import { InstallAppModal } from './components/InstallAppModal';
 import { AuthModal } from './components/AuthModal';
+import { MobileBottomNav } from './components/MobileBottomNav';
 import { deleteOriginalEpub, hasOriginalEpub, saveOriginalEpub } from './services/epubStorageService';
 import { deleteBookFromCloud, downloadBookFileFromCloud } from './services/firebase';
 
@@ -257,6 +258,7 @@ const AppContent: React.FC = () => {
         <div className="fixed inset-0 z-50 md:hidden bg-stone-950/60 backdrop-blur-xs flex">
           <div className="w-64 bg-[#F9F8F5] h-full shadow-2xl p-5 flex flex-col justify-between">
             <Sidebar
+              isMobile={true}
               currentView={currentView}
               onNavigate={(view) => {
                 handleNavigate(view);
@@ -330,6 +332,15 @@ const AppContent: React.FC = () => {
           )}
         </main>
       </div>
+
+      {/* Mobile Fixed Bottom Navigation Bar (Hidden on desktop) */}
+      <MobileBottomNav
+        currentView={currentView}
+        onNavigate={handleNavigate}
+        onOpenUpload={() => setIsUploadOpen(true)}
+        onOpenAuthModal={() => setIsAuthModalOpen(true)}
+        hasActiveBook={!!selectedBook || !!currentBook || books.length > 0}
+      />
 
       {/* Floating Mini Audio Player when browsing and listening */}
       {(isPlaying || isPaused) && currentBook && currentView !== 'reader' && (

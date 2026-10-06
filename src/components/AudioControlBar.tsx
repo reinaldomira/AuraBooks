@@ -51,8 +51,8 @@ export const AudioControlBar: React.FC<AudioControlBarProps> = ({
 
   return (
     <>
-      <div className="sticky bottom-0 z-40 bg-stone-900 text-stone-100 border-t border-stone-800 shadow-2xl backdrop-blur-lg">
-        <div className="max-w-5xl mx-auto px-4 sm:px-6 py-3">
+      <div className="sticky bottom-0 z-40 bg-stone-900 text-stone-100 border-t border-stone-800 shadow-2xl backdrop-blur-lg pb-[env(safe-area-inset-bottom,6px)]">
+        <div className="max-w-5xl mx-auto px-4 sm:px-6 py-2.5 sm:py-3">
           <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
             {/* Left: Current Track/Position Indicator */}
             <div className="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-start">
