@@ -1,5 +1,6 @@
 import { Book, Bookmark, BookHighlight, ReaderSettings, AudioSettings, ReadingSession } from '../types/book';
 import { SAMPLE_BOOKS } from './sampleBooks';
+import { scheduleAutoBackupOnProgressChange } from './googleDriveBackupService';
 
 const DB_NAME = 'AuraBooksDB';
 const DB_VERSION = 3;
@@ -187,6 +188,13 @@ export async function updateBookProgress(
   };
 
   await saveBook(updated);
+  
+  // Agenda backup automático no Google Drive de forma resiliente
+  try {
+    scheduleAutoBackupOnProgressChange();
+  } catch (backupErr) {
+    // Não interrompe o fluxo de leitura
+  }
 }
 
 export async function toggleFavorite(id: string): Promise<boolean> {

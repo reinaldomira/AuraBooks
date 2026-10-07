@@ -18,6 +18,60 @@ interface UploadModalProps {
   onBookImported: (book: Book, originalFile?: Blob | File, openReader?: boolean) => void;
 }
 
+/**
+ * Detecta o formato do livro com tolerância máxima:
+ * 1. Extensão do arquivo (.epub, .pdf, .mobi, .azw3, .azw, .kf8, .prc, .txt)
+ * 2. MIME type do arquivo
+ * 3. Assinatura de bytes mágicos (PDF %PDF, EPUB/ZIP PK, MOBI BOOKMOBI)
+ */
+async function detectBookFormat(file: File): Promise<'epub' | 'pdf' | 'mobi' | 'azw3' | 'txt' | null> {
+  const name = (file.name || '').trim().toLowerCase();
+
+  // 1. Verificação por extensão do arquivo
+  if (name.endsWith('.epub')) return 'epub';
+  if (name.endsWith('.pdf')) return 'pdf';
+  if (name.endsWith('.azw3') || name.endsWith('.kf8')) return 'azw3';
+  if (name.endsWith('.mobi') || name.endsWith('.azw') || name.endsWith('.prc')) return 'mobi';
+  if (name.endsWith('.txt') || name.endsWith('.text') || name.endsWith('.md') || name.endsWith('.markdown')) return 'txt';
+
+  // 2. Verificação por MIME type
+  const mime = (file.type || '').toLowerCase();
+  if (mime.includes('pdf')) return 'pdf';
+  if (mime.includes('epub')) return 'epub';
+  if (mime.includes('mobi') || mime.includes('mobipocket') || mime.includes('prc')) return 'mobi';
+  if (mime.includes('amazon') || mime.includes('kf8') || mime.includes('azw')) return 'azw3';
+  if (mime.startsWith('text/')) return 'txt';
+
+  // 3. Inspeção por bytes mágicos do cabeçalho
+  try {
+    const slice = file.slice(0, 80);
+    const buffer = await slice.arrayBuffer();
+    const bytes = new Uint8Array(buffer);
+
+    // PDF: %PDF-
+    if (bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46) {
+      return 'pdf';
+    }
+
+    // ZIP / EPUB: PK\x03\x04
+    if (bytes[0] === 0x50 && bytes[1] === 0x4B && bytes[2] === 0x03 && bytes[3] === 0x04) {
+      return 'epub';
+    }
+
+    // MOBI: 'BOOKMOBI' em offset 60
+    if (bytes.length >= 68) {
+      const magic = String.fromCharCode(...bytes.slice(60, 68));
+      if (magic === 'BOOKMOBI') {
+        return 'mobi';
+      }
+    }
+  } catch (err) {
+    console.warn('Falha na inspeção de cabeçalho do arquivo:', err);
+  }
+
+  return null;
+}
+
 export const UploadModal: React.FC<UploadModalProps> = ({
   isOpen,
   onClose,
@@ -43,38 +97,46 @@ export const UploadModal: React.FC<UploadModalProps> = ({
     setParsedBook(null);
     setLastUploadedFile(file);
 
-    const ext = file.name.split('.').pop()?.toLowerCase();
-
     try {
+      // Detecção inteligente e tolerante do formato do arquivo
+      const format = await detectBookFormat(file);
+
+      if (!format) {
+        const ext = file.name.includes('.') ? `.${file.name.split('.').pop()}` : '';
+        throw new Error(
+          `Formato de arquivo ${ext ? `"${ext}"` : 'não identificado'} não suportado. Formatos aceitos: .EPUB, .PDF, .MOBI, .AZW3 (ou .AZW) e .TXT.`
+        );
+      }
+
       // ETAPA 1: Processamento e Armazenamento Local (IndexedDB & Foliate)
       let book: Book;
-      if (ext === 'epub') {
+      if (format === 'epub') {
         setStatusMessage('Extraindo capítulos, metadados e sumário do EPUB...');
         book = await parseEpubFile(file);
         // Preserva o arquivo EPUB original intacto no armazenamento local para o Foliate.js
         await saveOriginalEpub(book.id, file);
-      } else if (ext === 'pdf') {
+      } else if (format === 'pdf') {
         setStatusMessage('Renderizando capa e extraindo páginas do PDF...');
         book = await parsePdfFile(file);
         // Preserva o arquivo PDF original intacto no armazenamento local
         await saveOriginalEpub(book.id, file);
-      } else if (ext === 'mobi' || ext === 'azw3' || ext === 'kf8') {
-        setStatusMessage(`Decodificando metadados, capa e seções do arquivo ${ext.toUpperCase()}...`);
+      } else if (format === 'mobi' || format === 'azw3') {
+        setStatusMessage(`Decodificando metadados, capa e seções do arquivo ${format.toUpperCase()}...`);
         book = await parseMobiOrAzw3File(file, file.name);
         // Preserva o arquivo original intacto no armazenamento local para o leitor imersivo
         await saveOriginalEpub(book.id, file);
-      } else if (ext === 'txt' || ext === 'md') {
+      } else if (format === 'txt') {
         setStatusMessage('Organizando seções e parágrafos do texto...');
         book = await parseTxtFile(file);
       } else {
-        throw new Error('Formato não suportado. Por favor, envie um arquivo .epub, .pdf, .mobi, .azw3 ou .txt');
+        throw new Error('Formato não suportado.');
       }
 
       setStatusMessage('✓ Livro salvo com segurança na biblioteca local...');
       await saveBook(book);
 
       // ETAPA 2: Envio do Arquivo Original (EPUB / PDF / MOBI / AZW3) para o Google Drive (/Livros)
-      if (ext === 'epub' || ext === 'pdf' || ext === 'mobi' || ext === 'azw3' || ext === 'kf8') {
+      if (format === 'epub' || format === 'pdf' || format === 'mobi' || format === 'azw3') {
         if (isDriveAuthorized()) {
           try {
             setStatusMessage('☁ Verificando pasta "Livros" no Google Drive...');
@@ -88,7 +150,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({
               book.driveSyncStatus = 'synced';
               setStatusMessage('✓ Vinculado ao arquivo existente no Google Drive (/Livros)');
             } else {
-              setStatusMessage(`☁ Enviando ${ext.toUpperCase()} original para Google Drive (/Livros)...`);
+              setStatusMessage(`☁ Enviando ${format.toUpperCase()} original para Google Drive (/Livros)...`);
               const driveFile = await uploadBookToDrive(file, file.name);
               book.driveFileId = driveFile.id;
               book.driveFileName = driveFile.name;
@@ -237,7 +299,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept=".epub,.pdf,.mobi,.azw3,.kf8,.txt,.md"
+                  accept=".epub,.pdf,.mobi,.azw3,.azw,.kf8,.prc,.txt,.md"
                   className="hidden"
                   onChange={(e) => {
                     if (e.target.files && e.target.files.length > 0) {
@@ -257,7 +319,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({
                   Suporta arquivos <span className="font-semibold text-stone-700">EPUB</span>,{' '}
                   <span className="font-semibold text-stone-700">PDF</span>,{' '}
                   <span className="font-semibold text-stone-700">MOBI</span>,{' '}
-                  <span className="font-semibold text-stone-700">AZW3</span> ou{' '}
+                  <span className="font-semibold text-stone-700">AZW3 / AZW</span> ou{' '}
                   <span className="font-semibold text-stone-700">TXT</span>
                 </p>
 

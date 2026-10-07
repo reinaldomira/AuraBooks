@@ -4,7 +4,7 @@ import {
   Trash2, Headphones, Sparkles, Filter, ChevronRight,
   BookMarked, Check, Info, Flame, Bookmark, Quote, 
   Share2, Plus, LayoutGrid, List as ListIcon, Award,
-  Upload, AlertTriangle, AlertCircle, X, Tag, FolderPlus, ArrowUpDown, Cloud, Loader2
+  Upload, AlertTriangle, AlertCircle, X, Tag, FolderPlus, ArrowUpDown, Cloud, Loader2, ShieldCheck
 } from 'lucide-react';
 import { Book } from '../types/book';
 import { useAudioReader } from '../context/AudioReaderContext';
@@ -33,6 +33,7 @@ interface LibraryViewProps {
   searchQuery?: string;
   onSearchChange?: (query: string) => void;
   onRefreshBooks?: () => Promise<void>;
+  onOpenBackupModal?: () => void;
 }
 
 /**
@@ -97,6 +98,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   searchQuery = '',
   onSearchChange,
   onRefreshBooks,
+  onOpenBackupModal,
 }) => {
   const { currentBook, isPlaying, isPaused, togglePlayPause } = useAudioReader();
   const { user, login, isBookInCloud } = useAuth();
@@ -399,6 +401,16 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
           </div>
 
           <div className="pt-2 flex flex-col sm:flex-row items-center justify-center gap-3">
+            {onOpenBackupModal && (
+              <button
+                onClick={onOpenBackupModal}
+                className="w-full sm:w-auto px-5 sm:px-6 py-3 bg-[#FAF6F0] hover:bg-[#F3ECE0] text-amber-950 border border-amber-300/90 rounded-xl text-xs sm:text-sm font-semibold font-sans shadow-2xs transition-all flex items-center justify-center gap-2 cursor-pointer active:scale-95"
+              >
+                <ShieldCheck className="w-4 h-4 text-amber-800" />
+                <span>Restaurar Backup do Drive</span>
+              </button>
+            )}
+
             <button
               onClick={handleImportFromDrive}
               disabled={isImportingFromDrive}
@@ -800,6 +812,18 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                     <option value="titleDesc">Título (Z-A)</option>
                   </select>
                 </div>
+
+                {/* Botão Backup Automático e Restauração no Drive */}
+                {onOpenBackupModal && (
+                  <button
+                    onClick={onOpenBackupModal}
+                    className="px-3.5 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-950 border border-amber-300/90 rounded-xl text-xs font-semibold font-sans shadow-2xs transition-colors flex items-center gap-1.5 cursor-pointer"
+                    title="Configurações de Backup Automático e Restauração no Google Drive"
+                  >
+                    <ShieldCheck className="w-3.5 h-3.5 text-amber-800" />
+                    <span>Backup Automático</span>
+                  </button>
+                )}
 
                 {/* Botão Carregar do Google Drive */}
                 <button

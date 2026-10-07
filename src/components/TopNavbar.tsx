@@ -13,6 +13,7 @@ interface TopNavbarProps {
   onNavigate: (view: AppView) => void;
   onOpenInstallModal?: () => void;
   onOpenAuthModal?: () => void;
+  onOpenBackupModal?: () => void;
 }
 
 export const TopNavbar: React.FC<TopNavbarProps> = ({
@@ -22,6 +23,7 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
   onNavigate,
   onOpenInstallModal,
   onOpenAuthModal,
+  onOpenBackupModal,
 }) => {
   const { user, login, logout, isSyncing, syncMessage, syncAll, isQuotaPaused } = useAuth();
   const [isMobileSearchOpen, setIsMobileSearchOpen] = useState(false);
@@ -110,6 +112,18 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
               <Moon className="w-3.5 h-3.5" />
             </button>
           </div>
+
+          {/* Botão Backup Automático e Restauração no Drive */}
+          {onOpenBackupModal && (
+            <button
+              onClick={onOpenBackupModal}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 border border-amber-300/80 text-amber-950 text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
+              title="Backup Automático e Restauração no Google Drive"
+            >
+              <Cloud className="w-3.5 h-3.5 text-amber-800" />
+              <span className="hidden sm:inline">Backup Drive</span>
+            </button>
+          )}
 
           {/* Botão Instalar App no Celular (Visível apenas em telas maiores / Desktop) */}
           {onOpenInstallModal && (

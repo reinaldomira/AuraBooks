@@ -24,10 +24,12 @@ import { UploadModal } from './components/UploadModal';
 import { MiniAudioPlayer } from './components/MiniAudioPlayer';
 import { InstallAppModal } from './components/InstallAppModal';
 import { AuthModal } from './components/AuthModal';
+import { DriveBackupModal } from './components/DriveBackupModal';
 import { MobileBottomNav } from './components/MobileBottomNav';
 import { deleteOriginalEpub, hasOriginalEpub } from './services/epubStorageService';
 import { deleteBookFromCloud } from './services/firebase';
 import { restoreBookFromDrive } from './services/googleDriveService';
+import { startAutoBackupService, stopAutoBackupService } from './services/googleDriveBackupService';
 
 const AppContent: React.FC = () => {
   const [books, setBooks] = useState<Book[]>([]);
@@ -37,6 +39,7 @@ const AppContent: React.FC = () => {
   const [isUploadOpen, setIsUploadOpen] = useState(false);
   const [isInstallModalOpen, setIsInstallModalOpen] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [isBackupModalOpen, setIsBackupModalOpen] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isOpeningCloudBook, setIsOpeningCloudBook] = useState(false);
@@ -80,6 +83,14 @@ const AppContent: React.FC = () => {
     load();
   }, [loadBook]);
 
+  // Inicializa o serviço de backup automático periódico no Google Drive
+  useEffect(() => {
+    startAutoBackupService();
+    return () => {
+      stopAutoBackupService();
+    };
+  }, []);
+
   const refreshBooks = async () => {
     const list = await getAllBooks();
     setBooks(list);
@@ -96,8 +107,8 @@ const AppContent: React.FC = () => {
     // Carrega a versão mais atual diretamente do banco IndexedDB para garantir que progresso e CFI recentes sejam usados
     const freshBook = (await getBook(book.id)) || book;
 
-    // Se for um EPUB ou PDF, verifica se o arquivo original já existe localmente no IndexedDB
-    if (freshBook.format === 'epub' || freshBook.format === 'pdf') {
+    // Se for um EPUB, PDF, MOBI ou AZW3, verifica se o arquivo original já existe localmente no IndexedDB
+    if (freshBook.format === 'epub' || freshBook.format === 'pdf' || freshBook.format === 'mobi' || freshBook.format === 'azw3') {
       const existsLocally = await hasOriginalEpub(freshBook.id);
       if (!existsLocally) {
         if (freshBook.driveFileId) {
@@ -303,6 +314,7 @@ const AppContent: React.FC = () => {
           onNavigate={handleNavigate}
           onOpenInstallModal={() => setIsInstallModalOpen(true)}
           onOpenAuthModal={() => setIsAuthModalOpen(true)}
+          onOpenBackupModal={() => setIsBackupModalOpen(true)}
         />
 
         {/* View Router */}
@@ -322,6 +334,7 @@ const AppContent: React.FC = () => {
               searchQuery={searchQuery}
               onSearchChange={setSearchQuery}
               onRefreshBooks={refreshBooks}
+              onOpenBackupModal={() => setIsBackupModalOpen(true)}
             />
           )}
 
@@ -387,6 +400,13 @@ const AppContent: React.FC = () => {
       <AuthModal
         isOpen={isAuthModalOpen}
         onClose={() => setIsAuthModalOpen(false)}
+      />
+
+      {/* Google Drive Automatic Backup & Restore Modal */}
+      <DriveBackupModal
+        isOpen={isBackupModalOpen}
+        onClose={() => setIsBackupModalOpen(false)}
+        onLibraryRestored={refreshBooks}
       />
 
       {/* Cloud Book Download Overlay */}

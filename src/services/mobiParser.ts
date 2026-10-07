@@ -58,14 +58,25 @@ function extractParagraphsFromDoc(doc: Document): { title: string; paragraphs: s
  */
 export async function parseMobiOrAzw3File(file: File | Blob, originalFileName?: string): Promise<Book> {
   const fileName = originalFileName || (file instanceof File ? file.name : 'livro.mobi');
-  const isAzw3 = fileName.toLowerCase().endsWith('.azw3') || fileName.toLowerCase().endsWith('.kf8');
+  const lowerName = fileName.toLowerCase().trim();
+  const isAzw3 = lowerName.endsWith('.azw3') || lowerName.endsWith('.kf8');
   const format: 'mobi' | 'azw3' = isAzw3 ? 'azw3' : 'mobi';
 
-  const mobiInstance = new MOBI({ unzlib: fflate.unzlibSync });
-  const bookData = await mobiInstance.open(file);
+  let bookData: any;
+  try {
+    const mobiInstance = new MOBI({ unzlib: fflate.unzlibSync });
+    bookData = await mobiInstance.open(file);
+  } catch (err: any) {
+    console.error('Erro ao decodificar arquivo MOBI/AZW3:', err);
+    const msg = err?.message || '';
+    if (msg.includes('encryption') || msg.includes('DRM') || msg.includes('compression')) {
+      throw new Error('Este arquivo Kindle pode conter proteção por DRM (direitos da Amazon) ou compressão não suportada. Converta-o para EPUB ou remova o DRM antes de carregar.');
+    }
+    throw new Error(`Falha ao ler arquivo ${format.toUpperCase()}: ${msg || 'Arquivo corrompido ou formato incompatível'}`);
+  }
 
   const metadata = bookData?.metadata || {};
-  const fallbackTitle = fileName.replace(/\.(mobi|azw3|kf8)$/i, '').replace(/[-_]/g, ' ').trim() || 'Livro Sem Título';
+  const fallbackTitle = fileName.replace(/\.(mobi|azw3|azw|kf8|prc)$/i, '').replace(/[-_]/g, ' ').trim() || 'Livro Sem Título';
   const title = (typeof metadata.title === 'string' && metadata.title.trim()) ? metadata.title.trim() : fallbackTitle;
   
   let author = 'Autor Desconhecido';

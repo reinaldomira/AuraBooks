@@ -212,8 +212,8 @@ export const BookDetailView: React.FC<BookDetailViewProps> = ({
             )}
           </div>
 
-          {/* Google Drive "Livros" Sync Status Card (para arquivos EPUB e PDF) */}
-          {(book.format === 'epub' || book.format === 'pdf') && (
+          {/* Google Drive "Livros" Sync Status Card (para arquivos EPUB, PDF, MOBI e AZW3) */}
+          {(book.format === 'epub' || book.format === 'pdf' || book.format === 'mobi' || book.format === 'azw3') && (
             <div className={`p-3.5 rounded-xl border flex flex-col gap-2.5 text-xs font-sans shadow-2xs ${
               isDriveError 
                 ? 'bg-rose-50/70 border-rose-200' 
