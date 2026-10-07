@@ -27,7 +27,7 @@ export interface Book {
   id: string;
   title: string;
   author: string;
-  format: 'epub' | 'pdf' | 'txt';
+  format: 'epub' | 'pdf' | 'txt' | 'mobi' | 'azw3';
   coverUrl: string;
   chapters: Chapter[];
   totalWords: number;

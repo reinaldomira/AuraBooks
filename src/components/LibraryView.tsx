@@ -133,7 +133,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     const checkStatus = async () => {
       const map: Record<string, boolean> = {};
       for (const b of books) {
-        if (b.format === 'epub' || b.format === 'pdf') {
+        if (b.format === 'epub' || b.format === 'pdf' || b.format === 'mobi' || b.format === 'azw3') {
           map[b.id] = await hasOriginalEpub(b.id);
         } else {
           map[b.id] = true;
@@ -602,7 +602,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                       </button>
 
                       {/* Botão Salvar no Drive para o livro em leitura se ainda não sincronizado ou se erro */}
-                      {(currentReadingBook.format === 'epub' || currentReadingBook.format === 'pdf') && 
+                      {(currentReadingBook.format === 'epub' || currentReadingBook.format === 'pdf' || currentReadingBook.format === 'mobi' || currentReadingBook.format === 'azw3') && 
                        (!currentReadingBook.driveFileId || currentReadingBook.driveSyncStatus === 'error' || currentReadingBook.driveSyncStatus !== 'synced') && (
                         <button
                           onClick={(e) => handleRetrySync(e, currentReadingBook)}
@@ -1023,7 +1023,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                   const isCompleted = progress >= 100;
                   const isInProgress = progress > 0 && progress < 100;
                   const isNotStarted = progress === 0;
-                  const isFormatSupported = book.format === 'epub' || book.format === 'pdf';
+                  const isFormatSupported = book.format === 'epub' || book.format === 'pdf' || book.format === 'mobi' || book.format === 'azw3';
                   const isEpubMissingLocally = isFormatSupported && !!book.driveFileId && localEpubStatus[book.id] === false;
                   const isLocal = localEpubStatus[book.id] !== false;
                   const isDriveSynced = isFormatSupported && !!book.driveFileId && book.driveSyncStatus === 'synced';

@@ -45,7 +45,7 @@ export const BookDetailView: React.FC<BookDetailViewProps> = ({
 
   useEffect(() => {
     let isMounted = true;
-    if (book.format === 'epub' || book.format === 'pdf') {
+    if (book.format === 'epub' || book.format === 'pdf' || book.format === 'mobi' || book.format === 'azw3') {
       hasOriginalEpub(book.id).then(exists => {
         if (isMounted) setIsLocalEpub(exists);
       });
@@ -89,7 +89,7 @@ export const BookDetailView: React.FC<BookDetailViewProps> = ({
   };
 
   const isCloud = !!book.syncedToCloud || (isBookInCloud ? isBookInCloud(book.id) : false);
-  const isFormatSupported = book.format === 'epub' || book.format === 'pdf';
+  const isFormatSupported = book.format === 'epub' || book.format === 'pdf' || book.format === 'mobi' || book.format === 'azw3';
   const isDriveSynced = isFormatSupported && !!book.driveFileId && book.driveSyncStatus === 'synced';
   const isDriveError = isFormatSupported && isLocalEpub !== false && book.driveSyncStatus === 'error';
   const isDriveNotSynced = isFormatSupported && isLocalEpub !== false && (!book.driveFileId || book.driveSyncStatus === 'not_connected' || (!isDriveSynced && !isDriveError));

@@ -3,6 +3,7 @@ import { Upload, FileText, CheckCircle2, AlertCircle, X, BookOpen, Sparkles, Loa
 import { parseEpubFile } from '../services/epubParser';
 import { parsePdfFile } from '../services/pdfParser';
 import { parseTxtFile } from '../services/txtParser';
+import { parseMobiOrAzw3File } from '../services/mobiParser';
 import { saveBook } from '../services/storageService';
 import { saveOriginalEpub, getOriginalEpub } from '../services/epubStorageService';
 import { Book } from '../types/book';
@@ -57,18 +58,23 @@ export const UploadModal: React.FC<UploadModalProps> = ({
         book = await parsePdfFile(file);
         // Preserva o arquivo PDF original intacto no armazenamento local
         await saveOriginalEpub(book.id, file);
+      } else if (ext === 'mobi' || ext === 'azw3' || ext === 'kf8') {
+        setStatusMessage(`Decodificando metadados, capa e seções do arquivo ${ext.toUpperCase()}...`);
+        book = await parseMobiOrAzw3File(file, file.name);
+        // Preserva o arquivo original intacto no armazenamento local para o leitor imersivo
+        await saveOriginalEpub(book.id, file);
       } else if (ext === 'txt' || ext === 'md') {
         setStatusMessage('Organizando seções e parágrafos do texto...');
         book = await parseTxtFile(file);
       } else {
-        throw new Error('Formato não suportado. Por favor, envie um arquivo .epub, .pdf ou .txt');
+        throw new Error('Formato não suportado. Por favor, envie um arquivo .epub, .pdf, .mobi, .azw3 ou .txt');
       }
 
       setStatusMessage('✓ Livro salvo com segurança na biblioteca local...');
       await saveBook(book);
 
-      // ETAPA 2: Envio do Arquivo Original (EPUB / PDF) para o Google Drive (/Livros)
-      if (ext === 'epub' || ext === 'pdf') {
+      // ETAPA 2: Envio do Arquivo Original (EPUB / PDF / MOBI / AZW3) para o Google Drive (/Livros)
+      if (ext === 'epub' || ext === 'pdf' || ext === 'mobi' || ext === 'azw3' || ext === 'kf8') {
         if (isDriveAuthorized()) {
           try {
             setStatusMessage('☁ Verificando pasta "Livros" no Google Drive...');
@@ -231,7 +237,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept=".epub,.pdf,.txt,.md"
+                  accept=".epub,.pdf,.mobi,.azw3,.kf8,.txt,.md"
                   className="hidden"
                   onChange={(e) => {
                     if (e.target.files && e.target.files.length > 0) {
@@ -249,7 +255,9 @@ export const UploadModal: React.FC<UploadModalProps> = ({
                 </p>
                 <p className="text-xs text-stone-500 mt-1.5">
                   Suporta arquivos <span className="font-semibold text-stone-700">EPUB</span>,{' '}
-                  <span className="font-semibold text-stone-700">PDF</span> ou{' '}
+                  <span className="font-semibold text-stone-700">PDF</span>,{' '}
+                  <span className="font-semibold text-stone-700">MOBI</span>,{' '}
+                  <span className="font-semibold text-stone-700">AZW3</span> ou{' '}
                   <span className="font-semibold text-stone-700">TXT</span>
                 </p>
 
@@ -333,7 +341,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({
               </div>
 
               {/* Status de Sincronização Google Drive / Local */}
-              {(parsedBook.format === 'epub' || parsedBook.format === 'pdf') && (
+              {(parsedBook.format === 'epub' || parsedBook.format === 'pdf' || parsedBook.format === 'mobi' || parsedBook.format === 'azw3') && (
                 <div className="mb-5 text-left">
                   {parsedBook.driveSyncStatus === 'synced' ? (
                     <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-800 flex items-center justify-between gap-2.5">

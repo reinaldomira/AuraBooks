@@ -231,7 +231,7 @@ const AppContent: React.FC = () => {
 
   // If in immersive reader, show full-screen book spread
   if (currentView === 'reader' && selectedBook) {
-    if (selectedBook.format === 'epub' && !useFallbackReader) {
+    if ((selectedBook.format === 'epub' || selectedBook.format === 'mobi' || selectedBook.format === 'azw3') && !useFallbackReader) {
       return (
         <EpubReaderView
           book={selectedBook}

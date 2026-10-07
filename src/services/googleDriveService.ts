@@ -218,11 +218,24 @@ export async function uploadBookToDrive(
   // Determina nome e MIME type com base na extensão ou tipo do arquivo
   let fileName = customFileName || (file instanceof File ? file.name : 'livro.epub');
   const isPdf = fileName.toLowerCase().endsWith('.pdf') || (file.type && file.type.includes('pdf'));
-  const mimeType = isPdf ? PDF_MIME_TYPE : EPUB_MIME_TYPE;
-
+  const isMobi = fileName.toLowerCase().endsWith('.mobi');
+  const isAzw3 = fileName.toLowerCase().endsWith('.azw3') || fileName.toLowerCase().endsWith('.kf8');
+  
+  let mimeType = EPUB_MIME_TYPE;
   if (isPdf) {
+    mimeType = PDF_MIME_TYPE;
     if (!fileName.toLowerCase().endsWith('.pdf')) {
       fileName = `${fileName}.pdf`;
+    }
+  } else if (isMobi) {
+    mimeType = 'application/x-mobipocket-ebook';
+    if (!fileName.toLowerCase().endsWith('.mobi')) {
+      fileName = `${fileName}.mobi`;
+    }
+  } else if (isAzw3) {
+    mimeType = 'application/vnd.amazon.ebook';
+    if (!fileName.toLowerCase().endsWith('.azw3')) {
+      fileName = `${fileName}.azw3`;
     }
   } else {
     if (!fileName.toLowerCase().endsWith('.epub')) {
@@ -849,14 +862,15 @@ export async function syncBookToDrive(
       };
     }
 
-    if (book.format !== 'epub' && book.format !== 'pdf') {
+    const isSupported = book.format === 'epub' || book.format === 'pdf' || book.format === 'mobi' || book.format === 'azw3';
+    if (!isSupported) {
       return {
         success: false,
-        error: 'O envio para o Google Drive está disponível para arquivos EPUB e PDF.'
+        error: 'O envio para o Google Drive está disponível para arquivos EPUB, PDF, MOBI e AZW3.'
       };
     }
 
-    // 2. Obtém o arquivo original (EPUB ou PDF)
+    // 2. Obtém o arquivo original (EPUB, PDF, MOBI ou AZW3)
     if (fileOverride) {
       await saveOriginalEpub(bookId, fileOverride);
     }
@@ -888,13 +902,15 @@ export async function syncBookToDrive(
     await ensureDriveAccessToken();
 
     // 4. Determina o nome do arquivo e verifica se já existe na pasta "Livros"
-    const extension = book.format === 'pdf' ? '.pdf' : '.epub';
+    let extension = '.epub';
+    if (book.format === 'pdf') extension = '.pdf';
+    else if (book.format === 'mobi') extension = '.mobi';
+    else if (book.format === 'azw3') extension = '.azw3';
+
     const defaultName = `${book.title}${extension}`;
     let targetFileName = book.driveFileName || (blob instanceof File ? blob.name : defaultName);
-    if (book.format === 'pdf' && !targetFileName.toLowerCase().endsWith('.pdf')) {
-      targetFileName = `${targetFileName}.pdf`;
-    } else if (book.format === 'epub' && !targetFileName.toLowerCase().endsWith('.epub')) {
-      targetFileName = `${targetFileName}.epub`;
+    if (!targetFileName.toLowerCase().endsWith(extension)) {
+      targetFileName = `${targetFileName}${extension}`;
     }
     if (onProgressMessage) {
       onProgressMessage('Verificando pasta "Livros" no Drive...');

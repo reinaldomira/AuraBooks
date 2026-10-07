@@ -803,7 +803,7 @@ export const EpubReaderView: React.FC<EpubReaderViewProps> = ({
 
           {/* Badge Informativa */}
           <div className="text-[11px] text-stone-400 hidden sm:block">
-            Motor: Foliate.js (EPUB Original)
+            Motor: Foliate.js ({book.format.toUpperCase()} Original)
           </div>
         </div>
       </footer>
