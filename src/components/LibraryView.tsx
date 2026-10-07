@@ -1,15 +1,20 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   Play, Pause, BookOpen, Clock, Heart, Search, 
   Trash2, Headphones, Sparkles, Filter, ChevronRight,
   BookMarked, Check, Info, Flame, Bookmark, Quote, 
   Share2, Plus, LayoutGrid, List as ListIcon, Award,
-  Upload, AlertTriangle, X, Tag, FolderPlus, ArrowUpDown, Cloud
+  Upload, AlertTriangle, AlertCircle, X, Tag, FolderPlus, ArrowUpDown, Cloud, Loader2
 } from 'lucide-react';
 import { Book } from '../types/book';
 import { useAudioReader } from '../context/AudioReaderContext';
 import { useAuth } from '../context/AuthContext';
 import { TagManagerModal } from './TagManagerModal';
+import { hasOriginalEpub, getOriginalEpub, saveOriginalEpub } from '../services/epubStorageService';
+import { 
+  restoreBookFromDrive, syncBookToDrive, importBooksFromDrive, 
+  ImportDriveProgress, ImportDriveResult 
+} from '../services/googleDriveService';
 
 export type SortOption = 'lastRead' | 'recent' | 'oldest' | 'titleAsc' | 'titleDesc';
 export type FilterTab = 'todos' | 'lendo' | 'nao-iniciados' | 'concluidos' | 'favoritos' | 'nuvem' | string;
@@ -27,6 +32,7 @@ interface LibraryViewProps {
   onCreateTag: (newTag: string) => void;
   searchQuery?: string;
   onSearchChange?: (query: string) => void;
+  onRefreshBooks?: () => Promise<void>;
 }
 
 /**
@@ -90,12 +96,13 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   onCreateTag,
   searchQuery = '',
   onSearchChange,
+  onRefreshBooks,
 }) => {
   const { currentBook, isPlaying, isPaused, togglePlayPause } = useAudioReader();
   const { user, login, isBookInCloud } = useAuth();
 
   const isCloudBook = (book: Book) => {
-    return !!book.syncedToCloud || (isBookInCloud ? isBookInCloud(book.id) : false);
+    return !!book.syncedToCloud || !!book.driveFileId || (isBookInCloud ? isBookInCloud(book.id) : false);
   };
 
   const [selectedTab, setSelectedTab] = useState<FilterTab>('todos');
@@ -104,6 +111,137 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   const [taggingBook, setTaggingBook] = useState<Book | null>(null);
   const [isCreatingTag, setIsCreatingTag] = useState(false);
   const [newTagName, setNewTagName] = useState('');
+
+  // Rastreamento da disponibilidade do EPUB original localmente no IndexedDB
+  const [localEpubStatus, setLocalEpubStatus] = useState<Record<string, boolean>>({});
+  const [downloadingBookId, setDownloadingBookId] = useState<string | null>(null);
+  const [downloadStepMsg, setDownloadStepMsg] = useState<string>('');
+  const [downloadError, setDownloadError] = useState<{ bookId: string; msg: string } | null>(null);
+
+  // Rastreamento de Re-sincronização / Retry Sync para o Google Drive
+  const [syncingBookId, setSyncingBookId] = useState<string | null>(null);
+  const [syncStepMsg, setSyncStepMsg] = useState<string>('');
+  const [syncError, setSyncError] = useState<{ bookId: string; msg: string } | null>(null);
+
+  // Rastreamento de Importação de Acervo Completo do Google Drive
+  const [isImportingFromDrive, setIsImportingFromDrive] = useState(false);
+  const [importProgress, setImportProgress] = useState<ImportDriveProgress | null>(null);
+  const [importResultModal, setImportResultModal] = useState<ImportDriveResult | null>(null);
+
+  useEffect(() => {
+    let isMounted = true;
+    const checkStatus = async () => {
+      const map: Record<string, boolean> = {};
+      for (const b of books) {
+        if (b.format === 'epub' || b.format === 'pdf') {
+          map[b.id] = await hasOriginalEpub(b.id);
+        } else {
+          map[b.id] = true;
+        }
+      }
+      if (isMounted) {
+        setLocalEpubStatus(map);
+      }
+    };
+    checkStatus();
+    return () => {
+      isMounted = false;
+    };
+  }, [books]);
+
+  const handleDownloadFromDrive = async (e: React.MouseEvent, book: Book) => {
+    e.stopPropagation();
+    if (downloadingBookId) return;
+
+    setDownloadingBookId(book.id);
+    setDownloadStepMsg('Baixando livro do Google Drive...');
+    setDownloadError(null);
+
+    const result = await restoreBookFromDrive(book.id, (step) => {
+      setDownloadStepMsg(step);
+    });
+
+    if (result.success) {
+      setLocalEpubStatus(prev => ({ ...prev, [book.id]: true }));
+      setDownloadStepMsg('✓ Livro disponível offline');
+      setTimeout(() => {
+        setDownloadingBookId(null);
+        setDownloadStepMsg('');
+      }, 1200);
+    } else {
+      setDownloadError({ bookId: book.id, msg: result.error || 'Erro ao baixar do Google Drive' });
+      setDownloadingBookId(null);
+      setDownloadStepMsg('');
+    }
+  };
+
+  const handleRetrySync = async (e: React.MouseEvent, book: Book, fileOverride?: File | Blob) => {
+    e.stopPropagation();
+    if (syncingBookId) return;
+
+    setSyncingBookId(book.id);
+    setSyncStepMsg('Conectando ao Google Drive...');
+    setSyncError(null);
+
+    const result = await syncBookToDrive(
+      book.id,
+      (step) => {
+        setSyncStepMsg(step);
+      },
+      true,
+      fileOverride
+    );
+
+    if (result.success) {
+      setLocalEpubStatus(prev => ({ ...prev, [book.id]: true }));
+      setSyncStepMsg('✓ Sincronizado no Google Drive');
+      if (onRefreshBooks) {
+        await onRefreshBooks();
+      }
+      setTimeout(() => {
+        setSyncingBookId(null);
+        setSyncStepMsg('');
+      }, 1500);
+    } else {
+      setSyncError({ bookId: book.id, msg: result.error || 'Erro ao sincronizar com o Google Drive' });
+      setSyncingBookId(null);
+      setSyncStepMsg('');
+      if (onRefreshBooks) {
+        await onRefreshBooks();
+      }
+    }
+  };
+
+  const handleImportFromDrive = async () => {
+    if (isImportingFromDrive) return;
+    setIsImportingFromDrive(true);
+    setImportProgress({ step: 'Conectando com o Google Drive...' });
+    setImportResultModal(null);
+
+    try {
+      const result = await importBooksFromDrive((prog) => {
+        setImportProgress(prog);
+      });
+
+      setIsImportingFromDrive(false);
+      setImportProgress(null);
+      setImportResultModal(result);
+
+      if (onRefreshBooks) {
+        await onRefreshBooks();
+      }
+    } catch (err: any) {
+      setIsImportingFromDrive(false);
+      setImportProgress(null);
+      setImportResultModal({
+        success: false,
+        totalFound: 0,
+        imported: 0,
+        alreadyPresent: 0,
+        errors: [err?.message || 'Falha ao conectar com o Google Drive.']
+      });
+    }
+  };
 
   const displayName = user?.displayName ? user.displayName.split(' ')[0] : 'Reinaldo';
 
@@ -245,13 +383,46 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
             </p>
           </div>
 
+          {/* Card de Restauração para quem trocou de computador */}
+          <div className="p-4 bg-amber-50/80 border border-amber-200/90 rounded-2xl text-left max-w-lg mx-auto text-xs text-stone-700 flex items-start gap-3">
+            <div className="w-9 h-9 rounded-xl bg-amber-100 text-amber-900 flex items-center justify-center shrink-0">
+              <Cloud className="w-5 h-5 text-amber-800" />
+            </div>
+            <div className="space-y-1">
+              <strong className="text-stone-900 block font-semibold text-xs sm:text-sm">
+                Trocou de computador ou seus livros estão salvos no Google Drive?
+              </strong>
+              <p className="text-stone-600 text-xs leading-relaxed">
+                Se você já enviou livros para a pasta <strong>Livros</strong> do seu Google Drive anteriormente, clique abaixo para restaurar e sincronizar todos eles neste novo PC.
+              </p>
+            </div>
+          </div>
+
           <div className="pt-2 flex flex-col sm:flex-row items-center justify-center gap-3">
+            <button
+              onClick={handleImportFromDrive}
+              disabled={isImportingFromDrive}
+              className="w-full sm:w-auto px-5 sm:px-6 py-3 bg-amber-900 hover:bg-amber-950 text-amber-50 rounded-xl text-xs sm:text-sm font-semibold font-sans shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer active:scale-95 disabled:opacity-75"
+            >
+              {isImportingFromDrive ? (
+                <>
+                  <Loader2 className="w-4 h-4 text-amber-300 animate-spin" />
+                  <span>{importProgress?.step || 'Conectando ao Drive...'}</span>
+                </>
+              ) : (
+                <>
+                  <Cloud className="w-4 h-4 text-amber-300" />
+                  <span>Carregar Livros do Google Drive</span>
+                </>
+              )}
+            </button>
+
             <button
               onClick={onOpenUpload}
               className="w-full sm:w-auto px-5 sm:px-6 py-3 bg-stone-950 hover:bg-stone-800 text-white rounded-xl text-xs sm:text-sm font-semibold font-sans shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer active:scale-95"
             >
               <Upload className="w-4 h-4 text-amber-300" />
-              <span>Importar Meu Primeiro Livro (EPUB / PDF)</span>
+              <span>Adicionar Arquivo do Computador</span>
             </button>
           </div>
 
@@ -430,6 +601,41 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                         <span className="hidden sm:inline">Ouvir em Áudio</span>
                       </button>
 
+                      {/* Botão Salvar no Drive para o livro em leitura se ainda não sincronizado ou se erro */}
+                      {(currentReadingBook.format === 'epub' || currentReadingBook.format === 'pdf') && 
+                       (!currentReadingBook.driveFileId || currentReadingBook.driveSyncStatus === 'error' || currentReadingBook.driveSyncStatus !== 'synced') && (
+                        <button
+                          onClick={(e) => handleRetrySync(e, currentReadingBook)}
+                          disabled={syncingBookId === currentReadingBook.id}
+                          className={`inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-lg text-xs font-semibold shadow-xs transition-colors cursor-pointer border ${
+                            currentReadingBook.driveSyncStatus === 'error'
+                              ? 'bg-rose-50 hover:bg-rose-100 text-rose-950 border-rose-300'
+                              : 'bg-amber-900 hover:bg-amber-950 text-white border-amber-900'
+                          }`}
+                          title={`Salvar arquivo original ${currentReadingBook.format.toUpperCase()} na pasta Livros no Google Drive`}
+                          aria-label="Salvar no Drive"
+                        >
+                          {syncingBookId === currentReadingBook.id ? (
+                            <>
+                              <Loader2 className="w-4 h-4 text-amber-300 animate-spin shrink-0" />
+                              <span>{syncStepMsg || 'Salvando...'}</span>
+                            </>
+                          ) : (
+                            <>
+                              <Cloud className={`w-4 h-4 shrink-0 ${currentReadingBook.driveSyncStatus === 'error' ? 'text-rose-700' : 'text-amber-300'}`} />
+                              <span>
+                                {currentReadingBook.driveSyncStatus === 'error' 
+                                  ? 'Tentar Salvar Novamente' 
+                                  : `Salvar ${currentReadingBook.format.toUpperCase()} no Drive`}
+                              </span>
+                              {currentReadingBook.driveSyncStatus === 'error' && (
+                                <span className="text-[10px] text-rose-700 bg-rose-100 px-1 rounded font-normal">erro</span>
+                              )}
+                            </>
+                          )}
+                        </button>
+                      )}
+
                       <button
                         onClick={() => setTaggingBook(currentReadingBook)}
                         className="p-2.5 rounded-lg border border-[#E8E2D9] text-stone-600 hover:text-stone-950 hover:bg-stone-50 transition-colors cursor-pointer"
@@ -594,6 +800,26 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                     <option value="titleDesc">Título (Z-A)</option>
                   </select>
                 </div>
+
+                {/* Botão Carregar do Google Drive */}
+                <button
+                  onClick={handleImportFromDrive}
+                  disabled={isImportingFromDrive}
+                  className="px-3.5 py-1.5 bg-[#FAF6F0] hover:bg-[#F3ECE0] text-stone-900 border border-[#E8DFD1] rounded-xl text-xs font-semibold font-sans shadow-2xs transition-colors flex items-center gap-1.5 cursor-pointer disabled:opacity-75"
+                  title="Escanear e carregar livros salvos na pasta Livros do Google Drive"
+                >
+                  {isImportingFromDrive ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 text-amber-800 animate-spin" />
+                      <span className="truncate max-w-[130px] sm:max-w-none">{importProgress?.step || 'Sincronizando...'}</span>
+                    </>
+                  ) : (
+                    <>
+                      <Cloud className="w-3.5 h-3.5 text-amber-800" />
+                      <span>Carregar do Drive</span>
+                    </>
+                  )}
+                </button>
 
                 {/* Botão de Adicionar Livro */}
                 <button
@@ -797,6 +1023,13 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                   const isCompleted = progress >= 100;
                   const isInProgress = progress > 0 && progress < 100;
                   const isNotStarted = progress === 0;
+                  const isFormatSupported = book.format === 'epub' || book.format === 'pdf';
+                  const isEpubMissingLocally = isFormatSupported && !!book.driveFileId && localEpubStatus[book.id] === false;
+                  const isLocal = localEpubStatus[book.id] !== false;
+                  const isDriveSynced = isFormatSupported && !!book.driveFileId && book.driveSyncStatus === 'synced';
+                  const isDriveError = isFormatSupported && book.driveSyncStatus === 'error';
+                  const isDriveNotSynced = isFormatSupported && !isDriveSynced && !isDriveError;
+                  const hasDriveSyncIssue = isDriveError || isDriveNotSynced;
 
                   return (
                     <div
@@ -837,11 +1070,61 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                           </div>
                         )}
 
-                        {/* Status Badge: Na Nuvem (Firebase) */}
-                        {isCloudBook(book) ? (
+                        {/* Status Badge: Erro de Sincronização com o Drive */}
+                        {isDriveError && (
+                          <div 
+                            className="absolute top-2 left-2 bg-rose-950/90 backdrop-blur-xs text-rose-200 border border-rose-500/50 px-1.5 py-0.5 rounded flex items-center gap-1 shadow-xs"
+                            title="Erro de sincronização com o Google Drive. Clique em Retry Sync abaixo."
+                          >
+                            <AlertCircle className="w-2.5 h-2.5 text-rose-400 shrink-0" />
+                            <span className="text-[8.5px] font-sans font-semibold text-rose-100">
+                              Drive erro
+                            </span>
+                          </div>
+                        )}
+
+                        {/* Status Badge: Não sincronizado com o Drive */}
+                        {!isCompleted && !isInProgress && !isDriveError && isDriveNotSynced && (
+                          <div 
+                            className="absolute top-2 left-2 bg-amber-950/85 backdrop-blur-xs text-amber-200 border border-amber-400/40 px-1.5 py-0.5 rounded flex items-center gap-1 shadow-xs"
+                            title="Não sincronizado com o Google Drive. Clique em Retry Sync abaixo para enviar para a pasta Livros."
+                          >
+                            <AlertCircle className="w-2.5 h-2.5 text-amber-400 shrink-0" />
+                            <span className="text-[8.5px] font-sans font-semibold text-amber-100">
+                              Não sincronizado
+                            </span>
+                          </div>
+                        )}
+
+                        {/* Status Badge: Na Nuvem (Firebase / Google Drive) */}
+                        {isEpubMissingLocally ? (
+                          <div 
+                            className="absolute bottom-2 right-2 bg-sky-950/90 backdrop-blur-xs text-sky-200 border border-sky-400/40 px-1.5 py-0.5 rounded flex items-center gap-1 shadow-xs" 
+                            title="Arquivo no Google Drive. Clique para baixar para ler offline neste dispositivo."
+                          >
+                            <Cloud className="w-3 h-3 text-sky-400 shrink-0" />
+                            <span className="text-[9px] font-sans font-semibold text-sky-100">Baixar</span>
+                          </div>
+                        ) : isDriveError ? (
+                          <div 
+                            className="absolute bottom-2 right-2 bg-rose-950/90 backdrop-blur-xs text-rose-200 border border-rose-500/50 px-1.5 py-0.5 rounded flex items-center gap-1 shadow-xs" 
+                            title="Erro ao sincronizar com Google Drive. Clique em Retry Sync abaixo."
+                          >
+                            <AlertCircle className="w-2.5 h-2.5 text-rose-400 shrink-0" />
+                            <span className="text-[8.5px] font-sans font-semibold text-rose-100">Erro Drive</span>
+                          </div>
+                        ) : isDriveSynced ? (
                           <div 
                             className="absolute bottom-2 right-2 bg-stone-950/85 backdrop-blur-xs text-sky-300 border border-sky-400/30 px-1.5 py-0.5 rounded flex items-center gap-1 shadow-xs" 
-                            title={book.hasCloudFile ? 'Livro e arquivo completo sincronizados na nuvem' : 'Sincronizado na nuvem (Google Firestore)'}
+                            title="Sincronizado na pasta Livros do Google Drive"
+                          >
+                            <Cloud className="w-3 h-3 text-sky-400 shrink-0" />
+                            <span className="text-[9px] font-sans font-semibold text-sky-200">Drive</span>
+                          </div>
+                        ) : isCloudBook(book) ? (
+                          <div 
+                            className="absolute bottom-2 right-2 bg-stone-950/85 backdrop-blur-xs text-sky-300 border border-sky-400/30 px-1.5 py-0.5 rounded flex items-center gap-1 shadow-xs" 
+                            title={book.hasCloudFile ? 'Livro e arquivo completo sincronizados na nuvem' : 'Sincronizado na nuvem'}
                           >
                             <Cloud className="w-3 h-3 text-sky-400 shrink-0" />
                             <span className="text-[9px] font-sans font-semibold text-sky-200">Nuvem</span>
@@ -942,41 +1225,132 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                         </div>
                       </div>
 
-                      {/* Action Bar (Ler, Áudio, Coleções, Excluir) */}
-                      <div className="pt-2 border-t border-stone-100 flex items-center justify-between gap-1.5">
-                        <button
-                          onClick={() => onOpenBook(book)}
-                          className="flex-1 py-1.5 px-2 bg-stone-900 hover:bg-stone-800 text-white rounded-lg text-[11px] font-semibold font-sans flex items-center justify-center gap-1 cursor-pointer transition-colors active:scale-95"
-                          title="Ler livro"
-                        >
-                          <BookOpen className="w-3 h-3 text-amber-300" />
-                          <span>{isInProgress ? 'Continuar' : 'Ler'}</span>
-                        </button>
+                      {/* Action Bar (Ler, Baixar do Drive, Áudio, Coleções, Excluir) */}
+                      <div className="pt-2 border-t border-stone-100 flex flex-col gap-1.5">
+                        <div className="flex items-center justify-between gap-1.5">
+                          {isEpubMissingLocally ? (
+                            <button
+                              onClick={(e) => handleDownloadFromDrive(e, book)}
+                              disabled={downloadingBookId === book.id}
+                              className="flex-1 py-1.5 px-2 bg-sky-950 hover:bg-sky-900 text-sky-100 border border-sky-800 rounded-lg text-[10.5px] font-semibold font-sans flex items-center justify-center gap-1 cursor-pointer transition-colors active:scale-95 shadow-2xs disabled:opacity-75"
+                              title={`Baixar arquivo ${book.format.toUpperCase()} original do Google Drive para ler offline`}
+                            >
+                              {downloadingBookId === book.id ? (
+                                <>
+                                  <Loader2 className="w-3 h-3 text-sky-300 animate-spin shrink-0" />
+                                  <span className="truncate">{downloadStepMsg || 'Baixando...'}</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Cloud className="w-3 h-3 text-sky-300 shrink-0" />
+                                  <span className="truncate">Baixar do Google Drive</span>
+                                </>
+                              )}
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => onOpenBook(book)}
+                              className="flex-1 py-1.5 px-2 bg-stone-900 hover:bg-stone-800 text-white rounded-lg text-[11px] font-semibold font-sans flex items-center justify-center gap-1 cursor-pointer transition-colors active:scale-95"
+                              title="Ler livro"
+                            >
+                              <BookOpen className="w-3 h-3 text-amber-300" />
+                              <span>{isInProgress ? 'Continuar' : 'Ler'}</span>
+                            </button>
+                          )}
 
-                        <button
-                          onClick={() => onPlayAudiobook(book)}
-                          className="p-1.5 sm:p-2 rounded-lg bg-[#FAF6F0] hover:bg-[#F3ECE0] text-stone-800 border border-[#E8DFD1] transition-colors cursor-pointer active:scale-95"
-                          title="Ouvir audiolivro"
-                        >
-                          <Headphones className="w-3.5 h-3.5 text-amber-700" />
-                        </button>
+                          <button
+                            onClick={() => onPlayAudiobook(book)}
+                            className="p-1.5 sm:p-2 rounded-lg bg-[#FAF6F0] hover:bg-[#F3ECE0] text-stone-800 border border-[#E8DFD1] transition-colors cursor-pointer active:scale-95"
+                            title="Ouvir audiolivro"
+                          >
+                            <Headphones className="w-3.5 h-3.5 text-amber-700" />
+                          </button>
 
-                        {/* Tag manager button */}
-                        <button
-                          onClick={() => setTaggingBook(book)}
-                          className="p-1.5 rounded text-stone-500 hover:text-stone-900 hover:bg-stone-100 border border-stone-200 transition-colors cursor-pointer"
-                          title="Gerenciar coleções deste livro"
-                        >
-                          <Tag className="w-3.5 h-3.5" />
-                        </button>
+                          {/* Tag manager button */}
+                          <button
+                            onClick={() => setTaggingBook(book)}
+                            className="p-1.5 rounded text-stone-500 hover:text-stone-900 hover:bg-stone-100 border border-stone-200 transition-colors cursor-pointer"
+                            title="Gerenciar coleções deste livro"
+                          >
+                            <Tag className="w-3.5 h-3.5" />
+                          </button>
 
-                        <button
-                          onClick={() => setBookToDelete(book)}
-                          className="p-1.5 rounded text-stone-400 hover:text-rose-600 hover:bg-rose-50 border border-stone-200 transition-colors cursor-pointer"
-                          title="Excluir livro da estante"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                          <button
+                            onClick={() => setBookToDelete(book)}
+                            className="p-1.5 rounded text-stone-400 hover:text-rose-600 hover:bg-rose-50 border border-stone-200 transition-colors cursor-pointer"
+                            title="Excluir livro da estante"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+
+                        {/* Botão Salvar no Drive / Retry Sync para livros que estão com status error ou not-synced */}
+                        {hasDriveSyncIssue && (
+                          <button
+                            onClick={(e) => handleRetrySync(e, book)}
+                            disabled={syncingBookId === book.id}
+                            className={`w-full py-1.5 px-2 rounded-lg text-[10.5px] font-semibold font-sans flex items-center justify-center gap-1.5 cursor-pointer transition-colors active:scale-95 shadow-2xs disabled:opacity-75 ${
+                              isDriveError
+                                ? 'bg-rose-50 hover:bg-rose-100 text-rose-950 border border-rose-300'
+                                : 'bg-amber-900 hover:bg-amber-950 text-white border border-amber-900'
+                            }`}
+                            title={`Salvar arquivo original ${book.format.toUpperCase()} na pasta Livros no Google Drive`}
+                            aria-label={`Salvar ${book.format.toUpperCase()} no Drive`}
+                          >
+                            {syncingBookId === book.id ? (
+                              <>
+                                <Loader2 className="w-3.5 h-3.5 text-amber-300 animate-spin shrink-0" />
+                                <span className="truncate">{syncStepMsg || 'Salvando no Drive...'}</span>
+                              </>
+                            ) : (
+                              <>
+                                <Cloud className={`w-3.5 h-3.5 shrink-0 ${isDriveError ? 'text-rose-700' : 'text-amber-300'}`} />
+                                <span className="font-bold">
+                                  {isDriveError 
+                                    ? 'Tentar Salvar Novamente' 
+                                    : `Salvar ${book.format.toUpperCase()} no Drive`}
+                                </span>
+                                {isDriveError && (
+                                  <span className="text-[9.5px] opacity-80 font-normal text-rose-700">
+                                    (Erro)
+                                  </span>
+                                )}
+                              </>
+                            )}
+                          </button>
+                        )}
+
+                        {/* Mensagem de erro ao sincronizar com Google Drive */}
+                        {syncError?.bookId === book.id && (
+                          <div className="bg-rose-50 border border-rose-200 rounded p-1.5 text-[10px] text-rose-800 font-sans flex items-start justify-between gap-1">
+                            <span className="leading-tight">{syncError.msg}</span>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSyncError(null);
+                              }}
+                              className="text-rose-600 hover:text-rose-900 font-bold shrink-0 px-0.5"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        )}
+
+                        {/* Mensagem de erro ao baixar do Google Drive */}
+                        {downloadError?.bookId === book.id && (
+                          <div className="bg-rose-50 border border-rose-200 rounded p-1.5 text-[10px] text-rose-800 font-sans flex items-start justify-between gap-1">
+                            <span className="leading-tight">{downloadError.msg}</span>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setDownloadError(null);
+                              }}
+                              className="text-rose-600 hover:text-rose-900 font-bold shrink-0 px-0.5"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        )}
                       </div>
                     </div>
                   );
@@ -1055,6 +1429,89 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
             onCreateTag(newTag);
           }}
         />
+      )}
+
+      {/* Modal de Progresso da Importação do Google Drive */}
+      {isImportingFromDrive && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-950/60 backdrop-blur-xs animate-in fade-in duration-200">
+          <div className="w-full max-w-md bg-white rounded-2xl shadow-2xl border border-stone-200 p-6 space-y-4 animate-in zoom-in-95 duration-200 text-center">
+            <div className="w-14 h-14 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 flex items-center justify-center mx-auto shadow-2xs">
+              <Loader2 className="w-7 h-7 text-amber-800 animate-spin" />
+            </div>
+            <div className="space-y-1.5">
+              <h3 className="font-serif-display font-bold text-lg text-stone-950">
+                Carregando Livros do Google Drive
+              </h3>
+              <p className="text-xs text-stone-600 font-sans leading-relaxed">
+                {importProgress?.step || 'Consultando a pasta "Livros" no seu Drive...'}
+              </p>
+              {importProgress?.total && importProgress.total > 0 && (
+                <div className="pt-2">
+                  <div className="w-full h-1.5 bg-stone-100 rounded-full overflow-hidden">
+                    <div 
+                      className="h-full bg-amber-800 transition-all duration-300 rounded-full"
+                      style={{ width: `${Math.round(((importProgress.current || 0) / importProgress.total) * 100)}%` }}
+                    />
+                  </div>
+                  <span className="text-[10px] text-stone-400 font-mono mt-1 block">
+                    {importProgress.current} de {importProgress.total} livros
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Conclusão da Importação do Google Drive */}
+      {importResultModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-950/60 backdrop-blur-xs animate-in fade-in duration-200">
+          <div className="w-full max-w-md bg-white rounded-2xl shadow-2xl border border-stone-200 p-6 space-y-5 animate-in zoom-in-95 duration-200">
+            <div className="flex items-start gap-4">
+              <div className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 border ${
+                importResultModal.imported > 0 || importResultModal.alreadyPresent > 0
+                  ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
+                  : 'bg-amber-50 border-amber-200 text-amber-800'
+              }`}>
+                {importResultModal.imported > 0 || importResultModal.alreadyPresent > 0 ? (
+                  <Check className="w-6 h-6" />
+                ) : (
+                  <Cloud className="w-6 h-6" />
+                )}
+              </div>
+              <div className="space-y-1.5 flex-1 min-w-0">
+                <h3 className="font-serif-display font-bold text-lg text-stone-950 leading-snug">
+                  {importResultModal.imported > 0
+                    ? `${importResultModal.imported} ${importResultModal.imported === 1 ? 'Livro Carregado' : 'Livros Carregados'} do Drive!`
+                    : importResultModal.alreadyPresent > 0
+                      ? 'Livros Sincronizados com Sucesso'
+                      : 'Nenhum Livro Encontrado no Drive'}
+                </h3>
+                <p className="text-xs text-stone-600 font-sans leading-relaxed">
+                  {importResultModal.imported > 0
+                    ? `Foram encontrados ${importResultModal.totalFound} arquivos na pasta "Livros". ${importResultModal.imported} obras foram baixadas, organizadas e adicionadas à sua estante.`
+                    : importResultModal.alreadyPresent > 0
+                      ? `Todos os ${importResultModal.alreadyPresent} livros encontrados no Google Drive já estão presentes e sincronizados na sua biblioteca.`
+                      : 'Não foram encontrados arquivos de livros (.epub ou .pdf) na pasta "Livros" do seu Google Drive. Se você salvou em outra pasta ou conta, verifique se está conectado na mesma conta Google usada no outro PC.'}
+                </p>
+                {importResultModal.errors.length > 0 && (
+                  <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-[11px] text-rose-800">
+                    Avisos: {importResultModal.errors.join('; ')}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-3 border-t border-stone-100 font-sans">
+              <button
+                onClick={() => setImportResultModal(null)}
+                className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-stone-900 hover:bg-stone-800 text-white text-xs font-semibold shadow-xs transition-colors cursor-pointer"
+              >
+                Entendido
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

@@ -25,8 +25,9 @@ import { MiniAudioPlayer } from './components/MiniAudioPlayer';
 import { InstallAppModal } from './components/InstallAppModal';
 import { AuthModal } from './components/AuthModal';
 import { MobileBottomNav } from './components/MobileBottomNav';
-import { deleteOriginalEpub, hasOriginalEpub, saveOriginalEpub } from './services/epubStorageService';
-import { deleteBookFromCloud, downloadBookFileFromCloud } from './services/firebase';
+import { deleteOriginalEpub, hasOriginalEpub } from './services/epubStorageService';
+import { deleteBookFromCloud } from './services/firebase';
+import { restoreBookFromDrive } from './services/googleDriveService';
 
 const AppContent: React.FC = () => {
   const [books, setBooks] = useState<Book[]>([]);
@@ -39,6 +40,8 @@ const AppContent: React.FC = () => {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isOpeningCloudBook, setIsOpeningCloudBook] = useState(false);
+  const [cloudDownloadStep, setCloudDownloadStep] = useState('Baixando livro do Google Drive...');
+  const [cloudDownloadError, setCloudDownloadError] = useState<string | null>(null);
   const [allTags, setAllTags] = useState<string[]>(() => getUserCustomTags());
   const [useFallbackReader, setUseFallbackReader] = useState(false);
 
@@ -93,20 +96,31 @@ const AppContent: React.FC = () => {
     // Carrega a versão mais atual diretamente do banco IndexedDB para garantir que progresso e CFI recentes sejam usados
     const freshBook = (await getBook(book.id)) || book;
 
-    // Se for um EPUB novo vindo da nuvem e ainda não baixado para este computador, baixa agora
-    if (freshBook.format === 'epub') {
+    // Se for um EPUB ou PDF, verifica se o arquivo original já existe localmente no IndexedDB
+    if (freshBook.format === 'epub' || freshBook.format === 'pdf') {
       const existsLocally = await hasOriginalEpub(freshBook.id);
-      if (!existsLocally && user) {
-        setIsOpeningCloudBook(true);
-        try {
-          const blob = await downloadBookFileFromCloud(user.uid, freshBook.id);
-          if (blob) {
-            await saveOriginalEpub(freshBook.id, blob);
+      if (!existsLocally) {
+        if (freshBook.driveFileId) {
+          setIsOpeningCloudBook(true);
+          setCloudDownloadStep('Baixando livro do Google Drive...');
+          try {
+            const result = await restoreBookFromDrive(freshBook.id, (step) => {
+              setCloudDownloadStep(step);
+            });
+            if (!result.success) {
+              console.warn('Falha ao restaurar livro do Google Drive:', result.error);
+              setCloudDownloadError(result.error || 'Não foi possível baixar o livro do Google Drive no momento.');
+              setIsOpeningCloudBook(false);
+              return;
+            }
+          } catch (err) {
+            console.warn('Erro ao obter arquivo do Google Drive antes de abrir:', err);
+            setCloudDownloadError('Falha na comunicação com o Google Drive. Verifique sua conexão.');
+            setIsOpeningCloudBook(false);
+            return;
+          } finally {
+            setIsOpeningCloudBook(false);
           }
-        } catch (err) {
-          console.warn('Erro ao obter arquivo EPUB da nuvem antes de abrir:', err);
-        } finally {
-          setIsOpeningCloudBook(false);
         }
       }
     }
@@ -129,13 +143,15 @@ const AppContent: React.FC = () => {
     playBook(book, book.currentChapterIndex, book.currentParagraphIndex);
   };
 
-  const handleBookImported = async (newBook: Book, originalFile?: Blob | File) => {
+  const handleBookImported = async (newBook: Book, originalFile?: Blob | File, openReader: boolean = false) => {
     await refreshBooks();
     setSelectedBook(newBook);
-    setUseFallbackReader(false);
-    setCurrentView('reader');
     if (user) {
       syncCurrentBook(newBook, originalFile);
+    }
+    if (openReader) {
+      setUseFallbackReader(false);
+      setCurrentView('reader');
     }
   };
 
@@ -305,6 +321,7 @@ const AppContent: React.FC = () => {
               onCreateTag={handleCreateTag}
               searchQuery={searchQuery}
               onSearchChange={setSearchQuery}
+              onRefreshBooks={refreshBooks}
             />
           )}
 
@@ -328,6 +345,7 @@ const AppContent: React.FC = () => {
               allTags={allTags}
               onSaveBookTags={handleSaveBookTags}
               onCreateTag={handleCreateTag}
+              onRefreshBooks={refreshBooks}
             />
           )}
         </main>
@@ -379,9 +397,29 @@ const AppContent: React.FC = () => {
               <Loader2 className="w-6 h-6 text-amber-700 animate-spin" />
             </div>
             <div>
-              <h3 className="font-semibold text-stone-900 text-sm">Baixando livro da nuvem...</h3>
-              <p className="text-xs text-stone-500 mt-1">Sincronizando o arquivo EPUB para este computador. Isso leva apenas alguns instantes.</p>
+              <h3 className="font-semibold text-stone-900 text-sm">Recuperando livro...</h3>
+              <p className="text-xs text-stone-600 mt-1.5 animate-pulse font-medium">{cloudDownloadStep}</p>
+              <p className="text-[11px] text-stone-400 mt-1">Sincronizando o arquivo EPUB original do Google Drive para o leitor local.</p>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Cloud Download Error Notice */}
+      {cloudDownloadError && (
+        <div className="fixed bottom-6 right-6 z-50 max-w-sm bg-rose-50 border border-rose-200 rounded-xl p-4 shadow-xl text-xs text-rose-900 animate-in slide-in-from-bottom duration-200">
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <strong className="block font-semibold text-rose-950 mb-0.5">Falha ao baixar livro do Drive</strong>
+              <p>{cloudDownloadError}</p>
+              <p className="text-[11px] text-rose-700 mt-1.5">Seus dados e progresso permanecem salvos com segurança.</p>
+            </div>
+            <button
+              onClick={() => setCloudDownloadError(null)}
+              className="text-rose-500 hover:text-rose-800 font-bold p-1"
+            >
+              ✕
+            </button>
           </div>
         </div>
       )}

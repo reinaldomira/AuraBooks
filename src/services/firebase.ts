@@ -15,7 +15,7 @@ import { Book } from '../types/book';
 const app = initializeApp(firebaseConfig);
 
 // 2. Initialize Firestore with explicit database ID (MANDATORY)
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+export const db = getFirestore(app, (firebaseConfig as any).firestoreDatabaseId || '(default)');
 export const auth = getAuth(app);
 
 // Quota Protection: Detecta se a cota gratuita diária do Firestore foi atingida e persiste no localStorage
@@ -148,12 +148,31 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   throw new Error(JSON.stringify(errInfo));
 }
 
-// 5. Auth operations
+// 5. Auth operations & Google Drive OAuth Token Management
+export const DRIVE_SCOPES = ['https://www.googleapis.com/auth/drive.file'];
+
+// In-memory access token cache (do not store in localStorage or sessionStorage per skill guidelines)
+let cachedDriveAccessToken: string | null = null;
+
+export function setDriveAccessToken(token: string | null) {
+  cachedDriveAccessToken = token;
+}
+
+export function getDriveAccessToken(): string | null {
+  return cachedDriveAccessToken;
+}
+
 export async function loginWithGoogle(): Promise<User> {
   const provider = new GoogleAuthProvider();
+  // Adiciona o escopo do Google Drive para armazenar e ler os EPUBs
+  provider.addScope('https://www.googleapis.com/auth/drive.file');
   provider.setCustomParameters({ prompt: 'select_account' });
   try {
     const result = await signInWithPopup(auth, provider);
+    const credential = GoogleAuthProvider.credentialFromResult(result);
+    if (credential?.accessToken) {
+      setDriveAccessToken(credential.accessToken);
+    }
     return result.user;
   } catch (error: any) {
     // Se o popup for bloqueado pelo WebView ou navegador
@@ -163,6 +182,25 @@ export async function loginWithGoogle(): Promise<User> {
     }
     throw error;
   }
+}
+
+/**
+ * Solicita ou renova a autorização do Google Drive via popup
+ */
+export async function requestGoogleDriveAccessToken(): Promise<string> {
+  if (cachedDriveAccessToken) {
+    return cachedDriveAccessToken;
+  }
+  const provider = new GoogleAuthProvider();
+  provider.addScope('https://www.googleapis.com/auth/drive.file');
+  provider.setCustomParameters({ prompt: 'select_account' });
+  const result = await signInWithPopup(auth, provider);
+  const credential = GoogleAuthProvider.credentialFromResult(result);
+  if (!credential?.accessToken) {
+    throw new Error('Não foi possível obter a autorização do Google Drive.');
+  }
+  setDriveAccessToken(credential.accessToken);
+  return credential.accessToken;
 }
 
 export async function loginWithEmail(email: string, pass: string): Promise<User> {
@@ -183,6 +221,7 @@ export async function registerWithEmail(email: string, pass: string, name: strin
 }
 
 export async function logoutUser(): Promise<void> {
+  setDriveAccessToken(null);
   await signOut(auth);
 }
 
@@ -250,6 +289,18 @@ export async function syncBookToCloud(userId: string, book: Book, force: boolean
     }
     if (book.tags && Array.isArray(book.tags)) {
       cleanData.tags = book.tags.slice(0, 10);
+    }
+    if (book.driveFileId) {
+      cleanData.driveFileId = book.driveFileId;
+    }
+    if (book.driveFileName) {
+      cleanData.driveFileName = book.driveFileName;
+    }
+    if (book.driveLastSyncedAt) {
+      cleanData.driveLastSyncedAt = book.driveLastSyncedAt;
+    }
+    if (book.driveSyncStatus) {
+      cleanData.driveSyncStatus = book.driveSyncStatus;
     }
 
     await setDoc(doc(db, 'users', userId, 'books', book.id), cleanData, { merge: true });

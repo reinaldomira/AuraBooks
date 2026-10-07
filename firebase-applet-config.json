@@ -1,12 +1,11 @@
 {
-  "projectId": "groovy-vine-hf4nj",
-  "appId": "1:475672818388:web:76c2c07b166ae0e0560141",
-  "apiKey": "AIzaSyDcyVEOyrfELKAmd2wd2MkYHojYWBJNUMg",
-  "authDomain": "groovy-vine-hf4nj.firebaseapp.com",
-  "firestoreDatabaseId": "ai-studio-aurabooksleitord-f4223696-5a22-486b-8c84-9b361187f748",
-  "storageBucket": "groovy-vine-hf4nj.firebasestorage.app",
-  "messagingSenderId": "475672818388",
+  "projectId": "gen-lang-client-0712945436",
+  "appId": "1:530575018780:web:bc13caf50df4cb660e88d9",
+  "apiKey": "AIzaSyA4o0tztABpdu2R-sEJI9QFZOrvGGW8gdI",
+  "authDomain": "gen-lang-client-0712945436.firebaseapp.com",
+  "storageBucket": "gen-lang-client-0712945436.firebasestorage.app",
+  "messagingSenderId": "530575018780",
   "measurementId": "",
-  "oAuthClientId": "475672818388-k3ts79q2sauto7mqpaiok1qjb5hblib0.apps.googleusercontent.com",
+  "oAuthClientId": "530575018780-u1oc9u8k000cassdc9kjtfh7r8i57ntl.apps.googleusercontent.com",
   "recaptchaSiteKey": ""
 }

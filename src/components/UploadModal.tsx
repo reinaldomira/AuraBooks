@@ -4,14 +4,17 @@ import { parseEpubFile } from '../services/epubParser';
 import { parsePdfFile } from '../services/pdfParser';
 import { parseTxtFile } from '../services/txtParser';
 import { saveBook } from '../services/storageService';
-import { saveOriginalEpub } from '../services/epubStorageService';
+import { saveOriginalEpub, getOriginalEpub } from '../services/epubStorageService';
 import { Book } from '../types/book';
 import { useAuth } from '../context/AuthContext';
+import { findBookByName, uploadBookToDrive, isDriveAuthorized } from '../services/googleDriveService';
+import { requestGoogleDriveAccessToken } from '../services/firebase';
+import { generatePdfFromBook } from '../services/pdfGenerator';
 
 interface UploadModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onBookImported: (book: Book, originalFile?: Blob | File) => void;
+  onBookImported: (book: Book, originalFile?: Blob | File, openReader?: boolean) => void;
 }
 
 export const UploadModal: React.FC<UploadModalProps> = ({
@@ -26,6 +29,8 @@ export const UploadModal: React.FC<UploadModalProps> = ({
   const [errorMessage, setErrorMessage] = useState('');
   const [parsedBook, setParsedBook] = useState<Book | null>(null);
   const [lastUploadedFile, setLastUploadedFile] = useState<File | null>(null);
+  const [driveSyncNote, setDriveSyncNote] = useState<string>('');
+  const [isConnectingDrive, setIsConnectingDrive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   if (!isOpen) return null;
@@ -33,21 +38,25 @@ export const UploadModal: React.FC<UploadModalProps> = ({
   const handleFile = async (file: File) => {
     setStatus('parsing');
     setErrorMessage('');
+    setDriveSyncNote('');
     setParsedBook(null);
     setLastUploadedFile(file);
 
     const ext = file.name.split('.').pop()?.toLowerCase();
 
     try {
+      // ETAPA 1: Processamento e Armazenamento Local (IndexedDB & Foliate)
       let book: Book;
       if (ext === 'epub') {
         setStatusMessage('Extraindo capítulos, metadados e sumário do EPUB...');
         book = await parseEpubFile(file);
-        // Preserva o arquivo EPUB original intacto no armazenamento para o Foliate.js
+        // Preserva o arquivo EPUB original intacto no armazenamento local para o Foliate.js
         await saveOriginalEpub(book.id, file);
       } else if (ext === 'pdf') {
         setStatusMessage('Renderizando capa e extraindo páginas do PDF...');
         book = await parsePdfFile(file);
+        // Preserva o arquivo PDF original intacto no armazenamento local
+        await saveOriginalEpub(book.id, file);
       } else if (ext === 'txt' || ext === 'md') {
         setStatusMessage('Organizando seções e parágrafos do texto...');
         book = await parseTxtFile(file);
@@ -55,16 +64,99 @@ export const UploadModal: React.FC<UploadModalProps> = ({
         throw new Error('Formato não suportado. Por favor, envie um arquivo .epub, .pdf ou .txt');
       }
 
-      setStatusMessage('Gravando na sua biblioteca local com segurança...');
+      setStatusMessage('✓ Livro salvo com segurança na biblioteca local...');
       await saveBook(book);
+
+      // ETAPA 2: Envio do Arquivo Original (EPUB / PDF) para o Google Drive (/Livros)
+      if (ext === 'epub' || ext === 'pdf') {
+        if (isDriveAuthorized()) {
+          try {
+            setStatusMessage('☁ Verificando pasta "Livros" no Google Drive...');
+            // Procura antes pelo nome na pasta "Livros" para não duplicar arquivos
+            const existingDriveFile = await findBookByName(file.name);
+
+            if (existingDriveFile) {
+              book.driveFileId = existingDriveFile.id;
+              book.driveFileName = existingDriveFile.name;
+              book.driveLastSyncedAt = Date.now();
+              book.driveSyncStatus = 'synced';
+              setStatusMessage('✓ Vinculado ao arquivo existente no Google Drive (/Livros)');
+            } else {
+              setStatusMessage(`☁ Enviando ${ext.toUpperCase()} original para Google Drive (/Livros)...`);
+              const driveFile = await uploadBookToDrive(file, file.name);
+              book.driveFileId = driveFile.id;
+              book.driveFileName = driveFile.name;
+              book.driveLastSyncedAt = Date.now();
+              book.driveSyncStatus = 'synced';
+              setStatusMessage('✓ Salvo no Google Drive (/Livros)');
+            }
+
+            // Atualiza o livro no IndexedDB com o driveFileId obtido
+            await saveBook(book);
+          } catch (driveErr: any) {
+            console.warn('Falha na sincronização com o Google Drive:', driveErr);
+            book.driveSyncStatus = 'error';
+            await saveBook(book);
+            setDriveSyncNote(driveErr?.message || 'Falha na comunicação com o Google Drive');
+          }
+        } else {
+          // Google Drive não conectado nesta sessão
+          book.driveSyncStatus = 'not_connected';
+          await saveBook(book);
+        }
+      }
+
       setParsedBook(book);
       setStatus('success');
-      // Immediately refresh books in parent component with original file for cloud backup
-      onBookImported(book, file);
+      // Atualiza a biblioteca em segundo plano sem fechar o modal
+      onBookImported(book, file, false);
     } catch (err: any) {
       console.error('Error parsing book file:', err);
       setStatus('error');
       setErrorMessage(err.message || 'Falha ao processar o arquivo. Verifique se o arquivo não está corrompido.');
+    }
+  };
+
+  const handleConnectDriveAndUpload = async () => {
+    if (!parsedBook) return;
+    setIsConnectingDrive(true);
+    setDriveSyncNote('');
+    try {
+      let fileToUpload = lastUploadedFile || (await getOriginalEpub(parsedBook.id));
+      if (!fileToUpload) {
+        if (parsedBook.format === 'pdf') {
+          fileToUpload = await generatePdfFromBook(parsedBook);
+          await saveOriginalEpub(parsedBook.id, fileToUpload);
+        } else {
+          throw new Error('Arquivo original não encontrado para envio ao Google Drive.');
+        }
+      }
+      await requestGoogleDriveAccessToken();
+      const fileName = fileToUpload instanceof File ? fileToUpload.name : `${parsedBook.title}.${parsedBook.format || 'pdf'}`;
+      const existing = await findBookByName(fileName);
+      const updatedBook: Book = { ...parsedBook };
+
+      if (existing) {
+        updatedBook.driveFileId = existing.id;
+        updatedBook.driveFileName = existing.name;
+        updatedBook.driveLastSyncedAt = Date.now();
+        updatedBook.driveSyncStatus = 'synced';
+      } else {
+        const driveFile = await uploadBookToDrive(fileToUpload, fileName);
+        updatedBook.driveFileId = driveFile.id;
+        updatedBook.driveFileName = driveFile.name;
+        updatedBook.driveLastSyncedAt = Date.now();
+        updatedBook.driveSyncStatus = 'synced';
+      }
+
+      await saveBook(updatedBook);
+      setParsedBook(updatedBook);
+      onBookImported(updatedBook, fileToUpload, false);
+    } catch (err: any) {
+      console.warn('Erro ao conectar e enviar para o Google Drive:', err);
+      setDriveSyncNote(err?.message || 'Não foi possível conectar com o Google Drive');
+    } finally {
+      setIsConnectingDrive(false);
     }
   };
 
@@ -87,7 +179,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({
 
   const handleFinish = () => {
     if (parsedBook) {
-      onBookImported(parsedBook, lastUploadedFile || undefined);
+      onBookImported(parsedBook, lastUploadedFile || undefined, true);
     }
     handleClose();
   };
@@ -95,6 +187,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({
   const handleClose = () => {
     setStatus('idle');
     setErrorMessage('');
+    setDriveSyncNote('');
     setParsedBook(null);
     onClose();
   };
@@ -220,7 +313,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({
                 {parsedBook.author} · {parsedBook.chapters.length} Capítulos · {parsedBook.estimatedAudioMinutes} min de áudio
               </p>
 
-              <div className="bg-white p-3.5 rounded-xl border border-stone-200 text-left text-xs space-y-1.5 mb-6">
+              <div className="bg-white p-3.5 rounded-xl border border-stone-200 text-left text-xs space-y-1.5 mb-4">
                 <div className="flex justify-between text-stone-600">
                   <span>Formato detectado:</span>
                   <span className="font-medium text-stone-900 uppercase">{parsedBook.format}</span>
@@ -238,6 +331,86 @@ export const UploadModal: React.FC<UploadModalProps> = ({
                   </span>
                 </div>
               </div>
+
+              {/* Status de Sincronização Google Drive / Local */}
+              {(parsedBook.format === 'epub' || parsedBook.format === 'pdf') && (
+                <div className="mb-5 text-left">
+                  {parsedBook.driveSyncStatus === 'synced' ? (
+                    <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-800 flex items-center justify-between gap-2.5">
+                      <div className="flex items-start gap-2.5 min-w-0">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                        <div>
+                          <span className="font-semibold block text-emerald-950">✓ Salvo no Google Drive (/Livros)</span>
+                          <span className="text-emerald-700 text-[11px] block">
+                            Arquivo original {parsedBook.format.toUpperCase()} sincronizado na nuvem e preservado localmente.
+                          </span>
+                          {parsedBook.driveFileId && (
+                            <span className="block text-[10px] text-emerald-600 font-mono mt-0.5 truncate">
+                              ID: {parsedBook.driveFileId}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleConnectDriveAndUpload}
+                        disabled={isConnectingDrive}
+                        className="px-2.5 py-1.5 bg-white hover:bg-emerald-100 text-emerald-900 border border-emerald-300 rounded-lg font-medium text-xs shrink-0 transition-colors cursor-pointer disabled:opacity-50"
+                        title="Reenviar arquivo para o Google Drive"
+                      >
+                        {isConnectingDrive ? 'Enviando...' : 'Reenviar'}
+                      </button>
+                    </div>
+                  ) : (
+                    <div className={`p-3 rounded-xl border text-xs flex flex-col gap-2.5 ${
+                      parsedBook.driveSyncStatus === 'error' 
+                        ? 'bg-rose-50/80 border-rose-200 text-rose-900' 
+                        : 'bg-stone-100 border-stone-200 text-stone-700'
+                    }`}>
+                      <div className="flex items-center justify-between gap-2.5">
+                        <div className="flex items-start gap-2 min-w-0">
+                          {parsedBook.driveSyncStatus === 'error' ? (
+                            <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                          ) : (
+                            <Cloud className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+                          )}
+                          <div>
+                            <span className="font-semibold block text-stone-900">
+                              {parsedBook.driveSyncStatus === 'error' 
+                                ? 'Erro ao enviar para o Google Drive' 
+                                : 'Salvo na biblioteca local'}
+                            </span>
+                            <span className="text-stone-600 block text-[11px] mt-0.5">
+                              {driveSyncNote 
+                                ? driveSyncNote 
+                                : `Clique ao lado para salvar uma cópia do ${parsedBook.format.toUpperCase()} na pasta Livros do Google Drive.`}
+                            </span>
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={handleConnectDriveAndUpload}
+                          disabled={isConnectingDrive}
+                          className="px-3.5 py-2 bg-amber-900 hover:bg-amber-950 text-white rounded-lg font-semibold text-xs shrink-0 transition-colors shadow-sm cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
+                        >
+                          {isConnectingDrive ? (
+                            <>
+                              <Loader2 className="w-3.5 h-3.5 text-amber-300 animate-spin" />
+                              <span>Enviando...</span>
+                            </>
+                          ) : (
+                            <>
+                              <Cloud className="w-3.5 h-3.5 text-amber-300" />
+                              <span>Salvar no Drive</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div className="flex gap-3">
                 <button

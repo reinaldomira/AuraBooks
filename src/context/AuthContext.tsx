@@ -1,15 +1,15 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { User, onAuthStateChanged } from 'firebase/auth';
+import { User, onAuthStateChanged, getRedirectResult, GoogleAuthProvider } from 'firebase/auth';
 import { 
   auth, loginWithGoogle, loginWithEmail, registerWithEmail, logoutUser, syncBookToCloud, 
   syncProgressToCloud, fetchUserBooksFromCloud, uploadBookFileToCloud,
   downloadBookFileFromCloud, deleteBookFromCloud,
-  isQuotaExceeded, setQuotaExceeded, isResourceExhaustedError
+  isQuotaExceeded, setQuotaExceeded, isResourceExhaustedError, setDriveAccessToken
 } from '../services/firebase';
-import { getRedirectResult } from 'firebase/auth';
 import { Book } from '../types/book';
 import { saveBook, getAllBooks } from '../services/storageService';
 import { getOriginalEpub, saveOriginalEpub, hasOriginalEpub } from '../services/epubStorageService';
+import { restoreBookFromDrive, isDriveAuthorized } from '../services/googleDriveService';
 
 interface AuthContextType {
   user: User | null;
@@ -110,19 +110,28 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               epubLocationCfi: shouldUpdateMeta && cBook.epubLocationCfi ? cBook.epubLocationCfi : existing.epubLocationCfi,
               isFavorite: cBook.isFavorite !== undefined ? cBook.isFavorite : existing.isFavorite,
               syncedToCloud: true,
-              hasCloudFile: !!cBook.hasCloudFile,
+              hasCloudFile: !!cBook.hasCloudFile || !!cBook.driveFileId,
+              driveFileId: cBook.driveFileId || existing.driveFileId,
+              driveFileName: cBook.driveFileName || existing.driveFileName,
+              driveLastSyncedAt: cBook.driveLastSyncedAt || existing.driveLastSyncedAt,
+              driveSyncStatus: cBook.driveSyncStatus || existing.driveSyncStatus || (cBook.driveFileId ? 'synced' : undefined),
             };
 
             await saveBook(updatedBook);
 
-            // Se for EPUB e ainda não tiver o arquivo físico neste PC, baixa da nuvem
-            if (cBook.format === 'epub' && cBook.hasCloudFile) {
+            // Se for EPUB ou PDF e ainda não tiver o arquivo físico neste PC, tenta obter da nuvem ou Google Drive
+            if (cBook.format === 'epub' || cBook.format === 'pdf') {
               const hasFileLocally = await hasOriginalEpub(cBook.bookId);
               if (!hasFileLocally) {
-                setSyncMessage(`Baixando arquivo do livro "${cBook.title}"...`);
-                const blob = await downloadBookFileFromCloud(currentUser.uid, cBook.bookId);
-                if (blob) {
-                  await saveOriginalEpub(cBook.bookId, blob);
+                if (cBook.hasCloudFile) {
+                  setSyncMessage(`Baixando arquivo do livro "${cBook.title}"...`);
+                  const blob = await downloadBookFileFromCloud(currentUser.uid, cBook.bookId);
+                  if (blob) {
+                    await saveOriginalEpub(cBook.bookId, blob);
+                  }
+                } else if (cBook.driveFileId && isDriveAuthorized()) {
+                  setSyncMessage(`Restaurando "${cBook.title}" do Google Drive...`);
+                  await restoreBookFromDrive(cBook.bookId);
                 }
               }
             }
@@ -152,17 +161,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               description: cBook.description || '',
               epubLocationCfi: cBook.epubLocationCfi || undefined,
               syncedToCloud: true,
-              hasCloudFile: !!cBook.hasCloudFile,
+              hasCloudFile: !!cBook.hasCloudFile || !!cBook.driveFileId,
+              driveFileId: cBook.driveFileId,
+              driveFileName: cBook.driveFileName,
+              driveLastSyncedAt: cBook.driveLastSyncedAt,
+              driveSyncStatus: cBook.driveSyncStatus || (cBook.driveFileId ? 'synced' : undefined),
             };
 
             await saveBook(newBook);
 
             // Baixa o arquivo do livro se disponível
-            if (cBook.format === 'epub' && cBook.hasCloudFile) {
-              setSyncMessage(`Baixando EPUB de "${cBook.title}"...`);
-              const blob = await downloadBookFileFromCloud(currentUser.uid, cBook.bookId);
-              if (blob) {
-                await saveOriginalEpub(cBook.bookId, blob);
+            if (cBook.format === 'epub' || cBook.format === 'pdf') {
+              if (cBook.hasCloudFile) {
+                setSyncMessage(`Baixando ${cBook.format.toUpperCase()} de "${cBook.title}"...`);
+                const blob = await downloadBookFileFromCloud(currentUser.uid, cBook.bookId);
+                if (blob) {
+                  await saveOriginalEpub(cBook.bookId, blob);
+                }
+              } else if (cBook.driveFileId && isDriveAuthorized()) {
+                setSyncMessage(`Restaurando "${cBook.title}" do Google Drive...`);
+                await restoreBookFromDrive(cBook.bookId);
               }
             }
           }
@@ -224,6 +242,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       if (currentUser) {
         await syncAll();
+      } else {
+        setDriveAccessToken(null);
       }
     });
 
@@ -241,6 +261,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     getRedirectResult(auth)
       .then(async (result) => {
         if (result?.user) {
+          const credential = GoogleAuthProvider.credentialFromResult(result);
+          if (credential?.accessToken) {
+            setDriveAccessToken(credential.accessToken);
+          }
           setUser(result.user);
           await syncAll();
         }

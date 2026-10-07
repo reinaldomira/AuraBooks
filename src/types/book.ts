@@ -21,6 +21,8 @@ export interface BookHighlight {
   pageNumber?: number;
 }
 
+export type DriveSyncStatus = 'not_connected' | 'pending' | 'synced' | 'error';
+
 export interface Book {
   id: string;
   title: string;
@@ -45,6 +47,10 @@ export interface Book {
   epubLocationCfi?: string;
   syncedToCloud?: boolean;
   hasCloudFile?: boolean;
+  driveFileId?: string;
+  driveFileName?: string;
+  driveLastSyncedAt?: number;
+  driveSyncStatus?: DriveSyncStatus;
 }
 
 export type ReaderTheme = 'alabaster' | 'sepia' | 'dark' | 'mint';

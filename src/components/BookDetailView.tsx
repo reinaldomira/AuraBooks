@@ -1,13 +1,15 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   ArrowLeft, BookOpen, Headphones, Share2, Bookmark, 
   Clock, CheckCircle2, Star, ThumbsUp, MessageSquare, 
-  ChevronRight, Sparkles, Layers, Quote, Trash2, AlertTriangle, Tag, Plus, Cloud 
+  ChevronRight, Sparkles, Layers, Quote, Trash2, AlertTriangle, AlertCircle, Tag, Plus, Cloud, Loader2 
 } from 'lucide-react';
 import { Book } from '../types/book';
 import { useAudioReader } from '../context/AudioReaderContext';
 import { useAuth } from '../context/AuthContext';
 import { TagManagerModal } from './TagManagerModal';
+import { syncBookToDrive } from '../services/googleDriveService';
+import { hasOriginalEpub } from '../services/epubStorageService';
 
 interface BookDetailViewProps {
   book: Book;
@@ -18,6 +20,7 @@ interface BookDetailViewProps {
   allTags: string[];
   onSaveBookTags: (bookId: string, tags: string[]) => void;
   onCreateTag: (newTag: string) => void;
+  onRefreshBooks?: () => Promise<void>;
 }
 
 export const BookDetailView: React.FC<BookDetailViewProps> = ({
@@ -29,12 +32,68 @@ export const BookDetailView: React.FC<BookDetailViewProps> = ({
   allTags,
   onSaveBookTags,
   onCreateTag,
+  onRefreshBooks,
 }) => {
   const [isConfirmDeleteOpen, setIsConfirmDeleteOpen] = useState(false);
   const [isTagModalOpen, setIsTagModalOpen] = useState(false);
   const { user, isBookInCloud, syncCurrentBook, isSyncing } = useAuth();
 
+  const [syncingToDrive, setSyncingToDrive] = useState(false);
+  const [driveSyncMsg, setDriveSyncMsg] = useState('');
+  const [driveSyncError, setDriveSyncError] = useState<string | null>(null);
+  const [isLocalEpub, setIsLocalEpub] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let isMounted = true;
+    if (book.format === 'epub' || book.format === 'pdf') {
+      hasOriginalEpub(book.id).then(exists => {
+        if (isMounted) setIsLocalEpub(exists);
+      });
+    } else {
+      setIsLocalEpub(true);
+    }
+    return () => { isMounted = false; };
+  }, [book.id, book.format]);
+
+  const handleRetrySync = async (fileOverride?: File) => {
+    if (syncingToDrive) return;
+    setSyncingToDrive(true);
+    setDriveSyncMsg('Conectando ao Google Drive...');
+    setDriveSyncError(null);
+
+    const result = await syncBookToDrive(
+      book.id,
+      (step) => setDriveSyncMsg(step),
+      true,
+      fileOverride
+    );
+
+    if (result.success) {
+      setDriveSyncMsg('✓ Sincronizado no Google Drive');
+      setIsLocalEpub(true);
+      if (onRefreshBooks) {
+        await onRefreshBooks();
+      }
+      setTimeout(() => {
+        setSyncingToDrive(false);
+        setDriveSyncMsg('');
+      }, 1500);
+    } else {
+      setDriveSyncError(result.error || 'Erro ao sincronizar com o Google Drive');
+      setSyncingToDrive(false);
+      setDriveSyncMsg('');
+      if (onRefreshBooks) {
+        await onRefreshBooks();
+      }
+    }
+  };
+
   const isCloud = !!book.syncedToCloud || (isBookInCloud ? isBookInCloud(book.id) : false);
+  const isFormatSupported = book.format === 'epub' || book.format === 'pdf';
+  const isDriveSynced = isFormatSupported && !!book.driveFileId && book.driveSyncStatus === 'synced';
+  const isDriveError = isFormatSupported && isLocalEpub !== false && book.driveSyncStatus === 'error';
+  const isDriveNotSynced = isFormatSupported && isLocalEpub !== false && (!book.driveFileId || book.driveSyncStatus === 'not_connected' || (!isDriveSynced && !isDriveError));
+  const hasDriveSyncIssue = isDriveError || isDriveNotSynced;
 
   const handleConfirmDelete = () => {
     onDeleteBook(book.id);
@@ -152,6 +211,103 @@ export const BookDetailView: React.FC<BookDetailViewProps> = ({
               </span>
             )}
           </div>
+
+          {/* Google Drive "Livros" Sync Status Card (para arquivos EPUB e PDF) */}
+          {(book.format === 'epub' || book.format === 'pdf') && (
+            <div className={`p-3.5 rounded-xl border flex flex-col gap-2.5 text-xs font-sans shadow-2xs ${
+              isDriveError 
+                ? 'bg-rose-50/70 border-rose-200' 
+                : isDriveSynced 
+                  ? 'bg-white border-[#E8E2D9]' 
+                  : 'bg-amber-50/60 border-amber-200/80'
+            }`}>
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${
+                    isDriveError
+                      ? 'bg-rose-100 text-rose-800'
+                      : isDriveSynced
+                        ? 'bg-sky-50 text-sky-700 border border-sky-200'
+                        : 'bg-amber-100 text-amber-800'
+                  }`}>
+                    <Cloud className="w-4 h-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-semibold text-stone-900 block leading-tight truncate">
+                        Google Drive (Livros)
+                      </span>
+                      {isDriveSynced ? (
+                        <span className="text-[9.5px] bg-emerald-50 text-emerald-800 border border-emerald-200 px-1.5 py-0.2 rounded font-medium">
+                          ✓ Sincronizado
+                        </span>
+                      ) : isDriveError ? (
+                        <span className="text-[9.5px] bg-rose-100 text-rose-900 border border-rose-300 px-1.5 py-0.2 rounded font-semibold flex items-center gap-0.5">
+                          <AlertCircle className="w-2.5 h-2.5" /> Erro
+                        </span>
+                      ) : (
+                        <span className="text-[9.5px] bg-amber-100 text-amber-900 border border-amber-300 px-1.5 py-0.2 rounded font-medium">
+                          Pendente
+                        </span>
+                      )}
+                    </div>
+                    <span className="text-[11px] text-stone-500 block truncate">
+                      {isDriveSynced
+                        ? (book.driveFileName ? `Arquivo: ${book.driveFileName}` : `Original salvo na pasta Livros`)
+                        : isDriveError
+                          ? `Ocorreu um erro ao sincronizar o ${book.format.toUpperCase()} com o Drive`
+                          : 'Cópia na nuvem pendente de sincronização'}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Botão sempre ativo para salvar ou atualizar no Drive */}
+                <button
+                  onClick={() => handleRetrySync()}
+                  disabled={syncingToDrive}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5 shrink-0 cursor-pointer disabled:opacity-50 ${
+                    isDriveError
+                      ? 'bg-rose-600 hover:bg-rose-700 text-white shadow-xs'
+                      : isDriveSynced
+                        ? 'bg-stone-100 hover:bg-stone-200 text-stone-700 border border-stone-200'
+                        : 'bg-amber-900 hover:bg-amber-950 text-white shadow-xs'
+                  }`}
+                  title={`Salvar arquivo ${book.format.toUpperCase()} na pasta Livros do Google Drive`}
+                  aria-label="Salvar no Drive"
+                >
+                  {syncingToDrive ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 text-amber-300 animate-spin" />
+                      <span>{driveSyncMsg || 'Salvando no Drive...'}</span>
+                    </>
+                  ) : (
+                    <>
+                      <Cloud className={`w-3.5 h-3.5 ${isDriveSynced ? 'text-emerald-600' : 'text-amber-300'}`} />
+                      <span>
+                        {isDriveError
+                          ? 'Tentar Novamente'
+                          : isDriveSynced
+                            ? 'Atualizar no Drive'
+                            : `Salvar ${book.format.toUpperCase()} no Drive`}
+                      </span>
+                    </>
+                  )}
+                </button>
+              </div>
+
+              {driveSyncError && (
+                <div className="bg-rose-100/80 border border-rose-300 rounded-lg p-2 text-[10.5px] text-rose-900 flex items-start justify-between gap-1">
+                  <span className="leading-tight">{driveSyncError}</span>
+                  <button
+                    onClick={() => setDriveSyncError(null)}
+                    className="text-rose-700 hover:text-rose-950 font-bold shrink-0 px-1"
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Action Buttons */}
           <div className="space-y-2.5">

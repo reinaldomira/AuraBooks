@@ -33,18 +33,25 @@ export interface StoredEpubRecord {
 }
 
 /**
- * Salva o arquivo EPUB original como Blob no IndexedDB isolado.
+ * Salva o arquivo original (EPUB ou PDF) como Blob no IndexedDB isolado.
  */
 export async function saveOriginalEpub(bookId: string, file: Blob | File): Promise<void> {
   try {
     const db = await openEpubDB();
-    const fileName = (file instanceof File) ? file.name : `${bookId}.epub`;
+    const isPdf = (file instanceof File && file.name.toLowerCase().endsWith('.pdf')) || (file.type && file.type.includes('pdf'));
+    const defaultExt = isPdf ? '.pdf' : '.epub';
+    const fileName = (file instanceof File) ? file.name : `${bookId}${defaultExt}`;
+    const defaultMime = isPdf ? 'application/pdf' : 'application/epub+zip';
+    
+    // Garante que o objeto armazenado é um Blob puro e clonável no IndexedDB
+    const safeBlob: Blob = file instanceof Blob ? file : new Blob([file as any], { type: defaultMime });
+
     const record: StoredEpubRecord = {
       bookId,
-      blob: file,
+      blob: safeBlob,
       name: fileName,
-      size: file.size,
-      mimeType: file.type || 'application/epub+zip',
+      size: safeBlob.size,
+      mimeType: safeBlob.type || defaultMime,
       updatedAt: Date.now(),
     };
 
@@ -56,13 +63,13 @@ export async function saveOriginalEpub(bookId: string, file: Blob | File): Promi
       req.onerror = () => reject(req.error);
     });
   } catch (err) {
-    console.error('Falha ao gravar arquivo EPUB original no IndexedDB:', err);
+    console.error('Falha ao gravar arquivo original no IndexedDB:', err);
     throw err;
   }
 }
 
 /**
- * Recupera o arquivo EPUB original (Blob) pelo ID do livro.
+ * Recupera o arquivo EPUB/PDF original (Blob) pelo ID do livro.
  */
 export async function getOriginalEpub(bookId: string): Promise<Blob | null> {
   try {
@@ -73,7 +80,18 @@ export async function getOriginalEpub(bookId: string): Promise<Blob | null> {
       const req = store.get(bookId);
       req.onsuccess = () => {
         const record = req.result as StoredEpubRecord | undefined;
-        resolve(record ? record.blob : null);
+        if (!record || !record.blob) {
+          resolve(null);
+          return;
+        }
+        const rawBlob = record.blob as unknown;
+        if (rawBlob instanceof Blob) {
+          resolve(rawBlob);
+        } else if (rawBlob instanceof ArrayBuffer) {
+          resolve(new Blob([rawBlob], { type: record.mimeType || 'application/pdf' }));
+        } else {
+          resolve(new Blob([rawBlob as any], { type: record.mimeType || 'application/pdf' }));
+        }
       };
       req.onerror = () => reject(req.error);
     });
