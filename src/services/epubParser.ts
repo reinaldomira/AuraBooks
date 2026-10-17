@@ -160,12 +160,43 @@ export async function parseEpubFile(file: File): Promise<Book> {
       if (
         properties.includes('cover-image') ||
         id.toLowerCase().includes('cover') ||
-        href.toLowerCase().includes('cover')
+        href.toLowerCase().includes('cover') ||
+        href.toLowerCase().includes('capa')
       ) {
         if (mediaType.startsWith('image/')) {
           coverHref = href;
         }
       }
+    }
+  }
+
+  // Fallback 1: meta[name="cover"] do EPUB 2
+  if (!coverHref) {
+    const metaCoverId = opfDoc.querySelector('meta[name="cover"]')?.getAttribute('content');
+    if (metaCoverId && manifestItems[metaCoverId]) {
+      coverHref = manifestItems[metaCoverId].href;
+    }
+  }
+
+  // Fallback 2: qualquer item de imagem no manifest com 'cover', 'title', 'jacket'
+  if (!coverHref) {
+    const fallbackItem = Object.values(manifestItems).find(item => 
+      item.mediaType.startsWith('image/') && 
+      (item.href.toLowerCase().includes('cover') || 
+       item.href.toLowerCase().includes('capa') || 
+       item.href.toLowerCase().includes('title') ||
+       item.href.toLowerCase().includes('jacket'))
+    );
+    if (fallbackItem) {
+      coverHref = fallbackItem.href;
+    }
+  }
+
+  // Fallback 3: primeira imagem do manifesto
+  if (!coverHref) {
+    const firstImageItem = Object.values(manifestItems).find(item => item.mediaType.startsWith('image/'));
+    if (firstImageItem) {
+      coverHref = firstImageItem.href;
     }
   }
 
@@ -180,6 +211,29 @@ export async function parseEpubFile(file: File): Promise<Book> {
         coverUrl = `data:image/${ext};base64,${base64}`;
       } catch {
         // cover fallback
+      }
+    }
+  }
+
+  // Fallback 4: Varre diretamente os arquivos do zip procurando primeira imagem
+  if (!coverUrl) {
+    const zipKeys = Object.keys(loadedZip.files);
+    const anyImgKey = zipKeys.find(k => {
+      const lk = k.toLowerCase();
+      return (lk.endsWith('.jpg') || lk.endsWith('.jpeg') || lk.endsWith('.png') || lk.endsWith('.webp')) && 
+             (lk.includes('cover') || lk.includes('capa') || lk.includes('titlepage'));
+    }) || zipKeys.find(k => {
+      const lk = k.toLowerCase();
+      return lk.endsWith('.jpg') || lk.endsWith('.jpeg') || lk.endsWith('.png') || lk.endsWith('.webp');
+    });
+
+    if (anyImgKey && loadedZip.files[anyImgKey]) {
+      try {
+        const base64 = await loadedZip.files[anyImgKey].async('base64');
+        const ext = anyImgKey.toLowerCase().endsWith('.png') ? 'png' : 'jpeg';
+        coverUrl = `data:image/${ext};base64,${base64}`;
+      } catch {
+        // ignore
       }
     }
   }

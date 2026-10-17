@@ -13,6 +13,8 @@ import { getBook, saveBook, getAllBooks } from './storageService';
 import { hasOriginalEpub, saveOriginalEpub, getOriginalEpub } from './epubStorageService';
 import { parseEpubFile } from './epubParser';
 import { parsePdfFile } from './pdfParser';
+import { parseMobiOrAzw3File } from './mobiParser';
+import { extractCoverFromFile } from './coverService';
 import { generatePdfFromBook } from './pdfGenerator';
 import { Book } from '../types/book';
 
@@ -584,10 +586,10 @@ export async function importBooksFromDrive(
         existing.driveSyncStatus = 'synced';
         existing.hasCloudFile = true;
         existing.driveLastSyncedAt = Date.now();
-        await saveBook(existing);
 
         // Se o arquivo físico original não estiver no IndexedDB deste PC, baixa do Drive
         const isLocallyAvailable = await hasOriginalEpub(existing.id);
+        let existingBlob: Blob | null = null;
         if (!isLocallyAvailable) {
           try {
             if (onProgress) {
@@ -598,12 +600,38 @@ export async function importBooksFromDrive(
                 bookTitle: existing.title
               });
             }
-            const blob = await downloadBookFromDrive(file.id);
-            await saveOriginalEpub(existing.id, blob);
+            existingBlob = await downloadBookFromDrive(file.id);
+            await saveOriginalEpub(existing.id, existingBlob);
           } catch (dlErr: any) {
             console.warn(`Aviso ao baixar cópia de ${existing.title}:`, dlErr);
           }
+        } else {
+          existingBlob = await getOriginalEpub(existing.id);
         }
+
+        // Se a capa estiver ausente ou quebrada no livro existente, extrai do arquivo
+        if (!existing.coverUrl || existing.coverUrl.trim().length < 100) {
+          if (existingBlob) {
+            try {
+              if (onProgress) {
+                onProgress({
+                  step: `Extraindo capa de "${existing.title}"...`,
+                  current: i + 1,
+                  total: bookFiles.length,
+                  bookTitle: existing.title
+                });
+              }
+              const extractedCover = await extractCoverFromFile(existingBlob, existing.format || file.name);
+              if (extractedCover && extractedCover.length > 50) {
+                existing.coverUrl = extractedCover;
+              }
+            } catch (covErr) {
+              console.warn(`Aviso ao extrair capa para "${existing.title}":`, covErr);
+            }
+          }
+        }
+
+        await saveBook(existing);
 
         alreadyPresent++;
         continue;
@@ -625,6 +653,16 @@ export async function importBooksFromDrive(
           throw new Error('Arquivo retornado pelo Google Drive está vazio.');
         }
 
+        const lowerFileName = file.name.toLowerCase();
+        const isPdf = lowerFileName.endsWith('.pdf') || (file.mimeType && file.mimeType.includes('pdf'));
+        const isMobi = lowerFileName.endsWith('.mobi');
+        const isAzw3 = lowerFileName.endsWith('.azw3') || lowerFileName.endsWith('.kf8');
+
+        let bookFormat: 'epub' | 'pdf' | 'mobi' | 'azw3' = 'epub';
+        if (isPdf) bookFormat = 'pdf';
+        else if (isMobi) bookFormat = 'mobi';
+        else if (isAzw3) bookFormat = 'azw3';
+
         let newBook: Book;
         const mime = isPdf ? PDF_MIME_TYPE : EPUB_MIME_TYPE;
         const fileObj = new File([blob], file.name, { type: mime });
@@ -632,6 +670,8 @@ export async function importBooksFromDrive(
         try {
           if (isPdf) {
             newBook = await parsePdfFile(fileObj);
+          } else if (isMobi || isAzw3) {
+            newBook = await parseMobiOrAzw3File(fileObj, file.name);
           } else {
             newBook = await parseEpubFile(fileObj);
           }
@@ -642,7 +682,7 @@ export async function importBooksFromDrive(
             id: `user-book-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
             title: cleanFileName,
             author: 'Autor',
-            format: isPdf ? 'pdf' : 'epub',
+            format: bookFormat,
             coverUrl: '',
             chapters: [],
             totalWords: 0,
@@ -657,6 +697,18 @@ export async function importBooksFromDrive(
             fileSize: blob.size,
             addedAt: Date.now()
           };
+        }
+
+        // Se ainda não tiver capa, garante a extração pelo coverService
+        if (!newBook.coverUrl || newBook.coverUrl.trim().length < 100) {
+          try {
+            const extracted = await extractCoverFromFile(blob, bookFormat);
+            if (extracted && extracted.length > 50) {
+              newBook.coverUrl = extracted;
+            }
+          } catch {
+            // ignore
+          }
         }
 
         newBook.driveFileId = file.id;

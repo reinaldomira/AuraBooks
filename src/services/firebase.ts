@@ -265,7 +265,8 @@ export async function syncBookToCloud(userId: string, book: Book, force: boolean
       author: (book.author || 'Autor desconhecido').slice(0, 200),
       format: book.format || 'epub',
       category: (book.category || 'Geral').slice(0, 100),
-      coverUrl: book.coverUrl ? book.coverUrl.slice(0, 500000) : '',
+      // Evita truncar base64 quebrando a imagem. Se for menor que 600KB armazena íntegro, caso contrário o coverService restaura localmente
+      coverUrl: (book.coverUrl && book.coverUrl.length <= 600000) ? book.coverUrl : '',
       progressPercent: typeof book.progressPercent === 'number' ? Math.max(0, Math.min(100, Math.round(book.progressPercent))) : 0,
       currentChapterIndex: typeof book.currentChapterIndex === 'number' ? Math.max(0, book.currentChapterIndex) : 0,
       currentParagraphIndex: typeof book.currentParagraphIndex === 'number' ? Math.max(0, book.currentParagraphIndex) : 0,

@@ -23,6 +23,54 @@ export interface BookHighlight {
 
 export type DriveSyncStatus = 'not_connected' | 'pending' | 'synced' | 'error';
 
+export interface BookAtmosphere {
+  label: string;
+  percent: number;
+  description: string;
+}
+
+export interface BookEditorialReview {
+  reviewerName: string;
+  avatarText: string;
+  rating: number; // 1 a 5
+  reviewText: string;
+  timeAgo: string;
+  helpfulCount: number;
+}
+
+export interface BookNotableQuote {
+  quote: string;
+  source: string;
+}
+
+export interface BookCommunityRating {
+  score: number;
+  totalRatings: number;
+  acclaimPercent: number;
+}
+
+export interface BookLiteraryDetails {
+  genre?: string;
+  subgenre?: string;
+  publishYear?: string;
+  publisher?: string;
+  edition?: string;
+  pageCount?: number;
+  isbn?: string;
+  translator?: string;
+  synopsis?: string;
+  synopsisSubtitle?: string;
+  historicalContext?: string;
+  curatorBadge?: string;
+  breadcrumbCategory?: string;
+  keyThemes?: string[];
+  notableQuote?: BookNotableQuote;
+  atmosphere?: BookAtmosphere[];
+  editorialReviews?: BookEditorialReview[];
+  communityRating?: BookCommunityRating;
+  aiEnrichedAt?: number;
+}
+
 export interface Book {
   id: string;
   title: string;
@@ -51,6 +99,7 @@ export interface Book {
   driveFileName?: string;
   driveLastSyncedAt?: number;
   driveSyncStatus?: DriveSyncStatus;
+  literaryDetails?: BookLiteraryDetails;
 }
 
 export type ReaderTheme = 'alabaster' | 'sepia' | 'dark' | 'mint';

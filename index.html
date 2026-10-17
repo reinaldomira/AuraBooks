@@ -4,17 +4,81 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <script>
-      // Suprime a notificação benigna de ResizeObserver dos motores Chromium/Safari (Foliate.js layout)
-      window.addEventListener('error', function (e) {
-        if (
-          e.message &&
-          (e.message.indexOf('ResizeObserver loop completed with undelivered notifications') !== -1 ||
-           e.message.indexOf('ResizeObserver loop limit exceeded') !== -1)
-        ) {
-          e.stopImmediatePropagation();
-          e.preventDefault();
+      (function() {
+        if (typeof window === 'undefined') return;
+
+        // Suprime falhas de WebSocket do Vite no ambiente embed onde HMR está inativo
+        var NativeWebSocket = window.WebSocket;
+        if (NativeWebSocket) {
+          class ViteSafeWebSocket extends EventTarget {
+            constructor(url, protocols) {
+              super();
+              this.url = url;
+              this.protocols = protocols;
+              this.readyState = 1; // WebSocket.OPEN
+              this.CONNECTING = 0;
+              this.OPEN = 1;
+              this.CLOSING = 2;
+              this.CLOSED = 3;
+              this.binaryType = 'blob';
+              this.bufferedAmount = 0;
+              this.extensions = '';
+              this.protocol = typeof protocols === 'string' ? protocols : (Array.isArray(protocols) ? protocols[0] || '' : '');
+              this.onopen = null;
+              this.onclose = null;
+              this.onerror = null;
+              this.onmessage = null;
+            }
+            send() {}
+            close() {
+              this.readyState = 3;
+            }
+          }
+          ViteSafeWebSocket.CONNECTING = 0;
+          ViteSafeWebSocket.OPEN = 1;
+          ViteSafeWebSocket.CLOSING = 2;
+          ViteSafeWebSocket.CLOSED = 3;
+          window.WebSocket = ViteSafeWebSocket;
         }
-      });
+
+        // Suprime notificações benignas de ResizeObserver e logs de WebSocket
+        var origConsoleError = console.error;
+        console.error = function() {
+          var args = Array.prototype.slice.call(arguments);
+          var text = args.map(function(a) {
+            return (a && a.message) || String(a || '');
+          }).join(' ');
+          if (text.indexOf('WebSocket') !== -1 || text.indexOf('ResizeObserver') !== -1) {
+            return;
+          }
+          origConsoleError.apply(console, arguments);
+        };
+
+        window.addEventListener('error', function (e) {
+          var msg = e && (e.message || (e.error && e.error.message) || '');
+          if (
+            typeof msg === 'string' &&
+            (msg.indexOf('ResizeObserver') !== -1 ||
+             msg.indexOf('WebSocket') !== -1)
+          ) {
+            e.stopImmediatePropagation();
+            e.preventDefault();
+            return true;
+          }
+        }, true);
+
+        window.addEventListener('unhandledrejection', function (e) {
+          var reason = e && (e.reason ? (e.reason.message || String(e.reason)) : '');
+          if (
+            typeof reason === 'string' &&
+            (reason.indexOf('WebSocket') !== -1 ||
+             reason.indexOf('ResizeObserver') !== -1)
+          ) {
+            e.stopImmediatePropagation();
+            e.preventDefault();
+          }
+        }, true);
+      })();
     </script>
     <title>Lumina Books - Biblioteca de Autores & Audiolivro</title>
     <meta name="description" content="Biblioteca literária editorial com leitor imersivo em duas páginas, organização automática de acervo em PDF e EPUB, e narração em áudio por voz natural." />

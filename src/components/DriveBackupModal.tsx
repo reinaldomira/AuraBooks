@@ -10,6 +10,7 @@ import {
   LibraryBackupData, AutoBackupConfig, BACKUP_FILE_NAME 
 } from '../services/googleDriveBackupService';
 import { isDriveAuthorized, ensureDriveAccessToken } from '../services/googleDriveService';
+import { repairAllMissingCovers } from '../services/coverService';
 
 interface DriveBackupModalProps {
   isOpen: boolean;
@@ -46,6 +47,36 @@ export const DriveBackupModal: React.FC<DriveBackupModalProps> = ({
   } | null>(null);
   const [restoreMode, setRestoreMode] = useState<'merge' | 'replace'>('merge');
 
+  // Estados de Reparo de Capas
+  const [isRepairingCovers, setIsRepairingCovers] = useState(false);
+  const [repairCoverMsg, setRepairCoverMsg] = useState('');
+  const [repairCoverSuccess, setRepairCoverSuccess] = useState('');
+
+  const handleRepairCovers = async () => {
+    if (isRepairingCovers) return;
+    setIsRepairingCovers(true);
+    setRepairCoverMsg('Iniciando recuperação de capas...');
+    setRepairCoverSuccess('');
+    try {
+      const { repairedCount } = await repairAllMissingCovers((c, t, tit) => {
+        setRepairCoverMsg(`Recuperando (${c}/${t}): ${tit}`);
+      });
+      if (repairedCount > 0) {
+        setRepairCoverSuccess(`${repairedCount} capa(s) recuperada(s) com sucesso!`);
+      } else {
+        setRepairCoverSuccess('Todas as capas já estão carregadas ou atualizadas.');
+      }
+      if (onLibraryRestored) {
+        await onLibraryRestored();
+      }
+    } catch (err: any) {
+      console.warn('Erro ao reparar capas:', err);
+    } finally {
+      setIsRepairingCovers(false);
+      setRepairCoverMsg('');
+    }
+  };
+
   useEffect(() => {
     if (isOpen) {
       setConfig(getAutoBackupConfig());
@@ -54,6 +85,7 @@ export const DriveBackupModal: React.FC<DriveBackupModalProps> = ({
       setBackupErrorMsg('');
       setRestoreResult(null);
       setRestoreFetchError('');
+      setRepairCoverSuccess('');
     }
   }, [isOpen]);
 
@@ -484,6 +516,46 @@ export const DriveBackupModal: React.FC<DriveBackupModalProps> = ({
                 <p className="text-[11.5px] text-emerald-800">
                   {restoreResult.books} livros, {restoreResult.highlights} anotações e {restoreResult.sessions} sessões de leitura foram recuperados. Seus livros estão prontos para leitura contínua!
                 </p>
+              </div>
+            )}
+          </div>
+
+          {/* SEÇÃO 3: Recuperação de Capas dos Livros neste Dispositivo */}
+          <div className="bg-white border border-[#E8E2D9] rounded-xl p-4 space-y-3 shadow-2xs">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <h3 className="font-semibold text-stone-900 text-sm flex items-center gap-1.5">
+                  <Sparkles className="w-4 h-4 text-amber-700" />
+                  Capas dos Livros no Dispositivo
+                </h3>
+                <p className="text-[11px] text-stone-500">
+                  Se você abriu o aplicativo em outro computador e as capas não apareceram, recarregue-as agora dos arquivos originais.
+                </p>
+              </div>
+
+              <button
+                onClick={handleRepairCovers}
+                disabled={isRepairingCovers}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-900 hover:bg-amber-950 text-white rounded-lg font-semibold text-xs transition-colors cursor-pointer disabled:opacity-50 shrink-0 shadow-2xs"
+              >
+                {isRepairingCovers ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-300" />
+                    <span>{repairCoverMsg || 'Recuperando capas...'}</span>
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                    <span>Recarregar Todas as Capas</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+            {repairCoverSuccess && (
+              <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded-lg text-emerald-900 flex items-center gap-2 text-[11px]">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>{repairCoverSuccess}</span>
               </div>
             )}
           </div>

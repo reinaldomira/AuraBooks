@@ -22,6 +22,7 @@ import {
   getAllReadingSessions, saveReadingSession, getUserCustomTags, 
   saveUserCustomTags, getReaderSettings, saveReaderSettings 
 } from './storageService';
+import { repairMissingBookCover, repairAllMissingCovers } from './coverService';
 import { Book, BookHighlight, ReadingSession, ReaderSettings } from '../types/book';
 
 export const BACKUP_FILE_NAME = 'aurabooks_library_backup.json';
@@ -133,6 +134,16 @@ export async function buildLibraryBackupPayload(): Promise<LibraryBackupData> {
   let totalHighlights = 0;
 
   for (const book of books) {
+    // Se o livro estiver sem capa antes de gerar o backup, tenta recuperá-la
+    if (!book.coverUrl || book.coverUrl.trim().length < 50) {
+      try {
+        const recovered = await repairMissingBookCover(book);
+        if (recovered) book.coverUrl = recovered;
+      } catch {
+        // ignore
+      }
+    }
+
     try {
       const bookHls = await getHighlights(book.id);
       if (bookHls && bookHls.length > 0) {
@@ -444,6 +455,11 @@ export async function restoreLibraryFromBackup(
           existing.hasCloudFile = true;
         }
 
+        // Se o livro restaurado tiver capa e o local não, ou vice-versa
+        if (b.coverUrl && (!existing.coverUrl || existing.coverUrl.trim().length < 50)) {
+          existing.coverUrl = b.coverUrl;
+        }
+
         await saveBook(existing);
       } else {
         // Livro novo ou modo replace
@@ -491,6 +507,16 @@ export async function restoreLibraryFromBackup(
     // Restaura configurações de leitor se disponíveis
     if (backupData.readerSettings) {
       saveReaderSettings(backupData.readerSettings);
+    }
+
+    // Varre e recupera capas que estejam ausentes
+    try {
+      if (onProgress) onProgress('Verificando e recuperando capas...');
+      await repairAllMissingCovers((curr, tot, title) => {
+        if (onProgress) onProgress(`Recuperando capas (${curr}/${tot}): ${title}...`);
+      });
+    } catch (covErr) {
+      console.warn('Aviso ao recuperar capas durante restauração:', covErr);
     }
 
     if (onProgress) onProgress('✓ Biblioteca restaurada com sucesso!');

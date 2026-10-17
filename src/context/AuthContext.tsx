@@ -10,6 +10,7 @@ import { Book } from '../types/book';
 import { saveBook, getAllBooks } from '../services/storageService';
 import { getOriginalEpub, saveOriginalEpub, hasOriginalEpub } from '../services/epubStorageService';
 import { restoreBookFromDrive, isDriveAuthorized } from '../services/googleDriveService';
+import { repairAllMissingCovers } from '../services/coverService';
 
 interface AuthContextType {
   user: User | null;
@@ -215,6 +216,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             await saveBook(lBook);
           }
         }
+      }
+
+      // Varre e recupera capas para livros que estejam sem capa localmente
+      try {
+        await repairAllMissingCovers();
+      } catch (covErr) {
+        console.warn('Aviso ao reparar capas na sincronização:', covErr);
       }
 
       if (isQuotaExceeded()) {

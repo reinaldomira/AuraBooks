@@ -94,6 +94,11 @@ const AppContent: React.FC = () => {
   const refreshBooks = async () => {
     const list = await getAllBooks();
     setBooks(list);
+    setSelectedBook((prev) => {
+      if (!prev) return null;
+      const found = list.find((b) => b.id === prev.id);
+      return found || prev;
+    });
   };
 
   // Recarrega os livros automaticamente quando a sincronização com a nuvem finaliza
