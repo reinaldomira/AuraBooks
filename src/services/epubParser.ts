@@ -1,5 +1,6 @@
 import JSZip from 'jszip';
 import { Book, Chapter } from '../types/book';
+import { optimizeCoverImage, fetchOnlineCover, generatePublisherCanvasCover, isValidCoverUrl } from './coverService';
 
 function cleanText(text: string): string {
   return text
@@ -206,9 +207,8 @@ export async function parseEpubFile(file: File): Promise<Book> {
     const coverFile = findZipFile(loadedZip, opfDir + coverHref) || findZipFile(loadedZip, coverHref);
     if (coverFile) {
       try {
-        const base64 = await coverFile.async('base64');
-        const ext = coverHref.toLowerCase().endsWith('.png') ? 'png' : 'jpeg';
-        coverUrl = `data:image/${ext};base64,${base64}`;
+        const blob = await coverFile.async('blob');
+        coverUrl = await optimizeCoverImage(blob);
       } catch {
         // cover fallback
       }
@@ -229,9 +229,8 @@ export async function parseEpubFile(file: File): Promise<Book> {
 
     if (anyImgKey && loadedZip.files[anyImgKey]) {
       try {
-        const base64 = await loadedZip.files[anyImgKey].async('base64');
-        const ext = anyImgKey.toLowerCase().endsWith('.png') ? 'png' : 'jpeg';
-        coverUrl = `data:image/${ext};base64,${base64}`;
+        const blob = await loadedZip.files[anyImgKey].async('blob');
+        coverUrl = await optimizeCoverImage(blob);
       } catch {
         // ignore
       }
@@ -313,12 +312,28 @@ export async function parseEpubFile(file: File): Promise<Book> {
   else if (lowerTitle.includes('ficção') || lowerDesc.includes('sci-fi') || lowerDesc.includes('fantasia')) category = 'Ficção & Fantasia';
   else if (language.startsWith('pt')) category = 'Literatura em Português';
 
+  // Se ainda não tiver capa, busca online ou gera capa editorial em Canvas
+  if (!isValidCoverUrl(coverUrl)) {
+    try {
+      const online = await fetchOnlineCover(title, author);
+      if (isValidCoverUrl(online)) {
+        coverUrl = online!;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  if (!isValidCoverUrl(coverUrl)) {
+    coverUrl = generatePublisherCanvasCover(title, author, 'epub', category);
+  }
+
   return {
     id: `user-book-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
     title,
     author,
     format: 'epub',
-    coverUrl: coverUrl || '',
+    coverUrl,
     chapters,
     totalWords,
     estimatedReadingMinutes,

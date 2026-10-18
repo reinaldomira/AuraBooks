@@ -1,4 +1,5 @@
 import { Book, Chapter } from '../types/book';
+import { generatePublisherCanvasCover, fetchOnlineCover } from './coverService';
 
 export async function parseTxtFile(file: File): Promise<Book> {
   const content = await file.text();
@@ -60,12 +61,22 @@ export async function parseTxtFile(file: File): Promise<Book> {
   const estimatedReadingMinutes = Math.max(1, Math.round(totalWords / 220));
   const estimatedAudioMinutes = Math.max(1, Math.round(totalWords / 150));
 
+  let coverUrl = '';
+  try {
+    const online = await fetchOnlineCover(title, 'Documento de Texto');
+    if (online && online.length > 50) coverUrl = online;
+  } catch {}
+
+  if (!coverUrl) {
+    coverUrl = generatePublisherCanvasCover(title, 'Documento de Texto', 'txt', 'Textos & Notas');
+  }
+
   return {
     id: `user-book-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
     title,
     author: 'Documento de Texto',
     format: 'txt',
-    coverUrl: '',
+    coverUrl,
     chapters,
     totalWords,
     estimatedReadingMinutes,

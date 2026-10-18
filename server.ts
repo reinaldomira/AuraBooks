@@ -180,6 +180,239 @@ Retorne um objeto JSON estritamente tipado contendo informações reais sobre ES
     }
   });
 
+  /**
+   * Endpoint de IA e acervos: Busca e recuperação de capas reais de livros
+   * Pesquisa no Open Library e usa Gemini para encontrar o ISBN e capa verídica
+   */
+  app.post('/api/books/cover', async (req, res) => {
+    try {
+      const { title, author } = req.body;
+      if (!title || typeof title !== 'string') {
+        return res.status(400).json({ success: false, error: 'Título é obrigatório' });
+      }
+
+      // Limpeza de título (remove extensões, tags de sites como [Z-Lib], (Edição x), etc.)
+      const cleanTitle = title
+        .replace(/\.(epub|pdf|mobi|azw3|azw|txt)$/i, '')
+        .replace(/\[[^\]]*\]|\([^\)]*\)/g, ' ')
+        .replace(/[-_]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+      const cleanAuthor = typeof author === 'string' 
+        ? author.replace(/\[[^\]]*\]|\([^\)]*\)/g, ' ').replace(/\s+/g, ' ').trim()
+        : '';
+
+      // Helper: Baixa imagem remota diretamente no servidor e converte para Data URL
+      // Evita problemas de CORS, 302 redirects e tainted canvas no navegador
+      async function downloadImageAsDataUrl(imgUrl: string): Promise<string | null> {
+        try {
+          const res = await fetch(imgUrl, { signal: AbortSignal.timeout(6000) });
+          if (!res.ok) return null;
+          const arrayBuffer = await res.arrayBuffer();
+          // Ignora imagens vazias / placeholders 1x1 (Open Library retorna GIF de 43 bytes se não existir)
+          if (arrayBuffer.byteLength < 1500) return null;
+          const base64 = Buffer.from(arrayBuffer).toString('base64');
+          const mime = res.headers.get('content-type') || 'image/jpeg';
+          return `data:${mime};base64,${base64}`;
+        } catch {
+          return null;
+        }
+      }
+
+      // 1. Tenta consulta direta no Open Library
+      try {
+        const query = cleanAuthor && cleanAuthor.toLowerCase() !== 'autor desconhecido'
+          ? `title=${encodeURIComponent(cleanTitle)}&author=${encodeURIComponent(cleanAuthor)}`
+          : `q=${encodeURIComponent(cleanTitle)}`;
+        
+        const olRes = await fetch(`https://openlibrary.org/search.json?${query}&limit=5`, {
+          signal: AbortSignal.timeout(4500),
+        });
+
+        if (olRes.ok) {
+          const olData: any = await olRes.json();
+          const docs = olData.docs || [];
+          for (const doc of docs) {
+            if (doc.cover_i) {
+              const coverUrl = `https://covers.openlibrary.org/b/id/${doc.cover_i}-L.jpg`;
+              const dataUrl = await downloadImageAsDataUrl(coverUrl);
+              if (dataUrl) {
+                return res.json({
+                  success: true,
+                  source: 'openlibrary',
+                  coverUrl: dataUrl,
+                  title: doc.title || cleanTitle,
+                  author: doc.author_name?.[0] || cleanAuthor,
+                });
+              }
+            }
+          }
+        }
+      } catch {
+        // Continua para o Gemini
+      }
+
+      // 2. Se Gemini estiver disponível, deduz o ISBN ou título canônico exato
+      if (ai) {
+        try {
+          const prompt = `Para o livro com título "${cleanTitle}" e autor "${cleanAuthor || 'Desconhecido'}", identifique o ISBN-13 verídico da obra e informações bibliográficas oficiais para localizar a capa do livro.
+Responda APENAS em JSON no formato:
+{
+  "canonicalTitle": "Título oficial",
+  "canonicalAuthor": "Autor oficial",
+  "isbn13": "978...",
+  "genre": "Gênero principal"
+}`;
+
+          const geminiResp = await ai.models.generateContent({
+            model: 'gemini-3.8-flash',
+            contents: prompt,
+            config: {
+              responseMimeType: 'application/json',
+            },
+          });
+
+          const geminiText = geminiResp.text?.trim() || '{}';
+          const info = JSON.parse(geminiText);
+
+          if (info.isbn13) {
+            const cleanIsbn = info.isbn13.replace(/[^0-9X]/gi, '');
+            const isbnCoverUrl = `https://covers.openlibrary.org/b/isbn/${cleanIsbn}-L.jpg`;
+            const dataUrl = await downloadImageAsDataUrl(isbnCoverUrl);
+            if (dataUrl) {
+              return res.json({
+                success: true,
+                source: 'gemini-isbn',
+                coverUrl: dataUrl,
+                isbn: cleanIsbn,
+                canonicalTitle: info.canonicalTitle,
+                canonicalAuthor: info.canonicalAuthor,
+              });
+            }
+          }
+        } catch (geminiErr) {
+          console.warn('Erro ao consultar Gemini para capa:', geminiErr);
+        }
+      }
+
+      return res.json({
+        success: false,
+        message: 'Nenhuma capa fotográfica encontrada nos acervos públicos',
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  /**
+   * Endpoint de pesquisa de candidatos a capa
+   * Retorna uma lista de edições reais com miniatura e imagem completa para o usuário escolher
+   */
+  app.post('/api/books/cover-search', async (req, res) => {
+    try {
+      const { query, title, author } = req.body;
+      const rawSearch = (query || `${title || ''} ${author || ''}`).trim();
+      if (!rawSearch) {
+        return res.status(400).json({ success: false, error: 'Termo de busca é obrigatório' });
+      }
+
+      const cleanSearch = rawSearch
+        .replace(/\.(epub|pdf|mobi|azw3|azw|txt)$/i, '')
+        .replace(/\[[^\]]*\]|\([^\)]*\)/g, ' ')
+        .replace(/[-_]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+      const candidates: Array<{
+        id: string;
+        title: string;
+        author?: string;
+        thumbnailUrl: string;
+        fullUrl: string;
+        year?: number;
+      }> = [];
+
+      // 1. Pesquisa no Open Library
+      try {
+        const olRes = await fetch(
+          `https://openlibrary.org/search.json?q=${encodeURIComponent(cleanSearch)}&limit=12`,
+          { signal: AbortSignal.timeout(5000) }
+        );
+        if (olRes.ok) {
+          const olData: any = await olRes.json();
+          const docs = olData.docs || [];
+          const seenCoverIds = new Set<number>();
+
+          for (const doc of docs) {
+            if (doc.cover_i && !seenCoverIds.has(doc.cover_i)) {
+              seenCoverIds.add(doc.cover_i);
+              candidates.push({
+                id: `ol-${doc.cover_i}`,
+                title: doc.title || cleanSearch,
+                author: doc.author_name?.[0] || '',
+                year: doc.first_publish_year,
+                thumbnailUrl: `https://covers.openlibrary.org/b/id/${doc.cover_i}-M.jpg`,
+                fullUrl: `https://covers.openlibrary.org/b/id/${doc.cover_i}-L.jpg`,
+              });
+            }
+          }
+        }
+      } catch (olErr) {
+        console.warn('Erro ao pesquisar candidatos no Open Library:', olErr);
+      }
+
+      // 2. Se nenhum candidato foi encontrado no Open Library e Gemini está ativo, busca ISBN oficial
+      if (candidates.length === 0 && ai) {
+        try {
+          const prompt = `Identifique 1 a 3 edições oficiais reais (com ISBN-13 verídicos) para a obra "${cleanSearch}".
+Responda APENAS em JSON no formato:
+{
+  "editions": [
+    {
+      "title": "Título oficial",
+      "author": "Autor oficial",
+      "isbn13": "978...",
+      "year": 1900
+    }
+  ]
+}`;
+          const geminiResp = await ai.models.generateContent({
+            model: 'gemini-3.8-flash',
+            contents: prompt,
+            config: { responseMimeType: 'application/json' },
+          });
+
+          const parsed = JSON.parse(geminiResp.text?.trim() || '{}');
+          if (Array.isArray(parsed.editions)) {
+            for (const ed of parsed.editions) {
+              if (ed.isbn13) {
+                const cleanIsbn = ed.isbn13.replace(/[^0-9X]/gi, '');
+                candidates.push({
+                  id: `isbn-${cleanIsbn}`,
+                  title: ed.title || cleanSearch,
+                  author: ed.author || '',
+                  year: ed.year,
+                  thumbnailUrl: `https://covers.openlibrary.org/b/isbn/${cleanIsbn}-M.jpg`,
+                  fullUrl: `https://covers.openlibrary.org/b/isbn/${cleanIsbn}-L.jpg`,
+                });
+              }
+            }
+          }
+        } catch (geminiErr) {
+          console.warn('Erro ao consultar Gemini para edições de capa:', geminiErr);
+        }
+      }
+
+      return res.json({
+        success: true,
+        candidates,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   // Health check endpoint
   app.get('/api/health', (_req, res) => {
     res.json({

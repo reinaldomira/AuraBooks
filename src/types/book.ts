@@ -100,6 +100,7 @@ export interface Book {
   driveLastSyncedAt?: number;
   driveSyncStatus?: DriveSyncStatus;
   literaryDetails?: BookLiteraryDetails;
+  customCoverApplied?: boolean;
 }
 
 export type ReaderTheme = 'alabaster' | 'sepia' | 'dark' | 'mint';

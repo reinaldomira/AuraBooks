@@ -10,7 +10,7 @@ import { Book } from '../types/book';
 import { saveBook, getAllBooks } from '../services/storageService';
 import { getOriginalEpub, saveOriginalEpub, hasOriginalEpub } from '../services/epubStorageService';
 import { restoreBookFromDrive, isDriveAuthorized } from '../services/googleDriveService';
-import { repairAllMissingCovers } from '../services/coverService';
+import { repairAllMissingCovers, repairMissingBookCover, isValidCoverUrl } from '../services/coverService';
 
 interface AuthContextType {
   user: User | null;
@@ -97,13 +97,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             const cloudTimestamp = cBook.lastReadAt || 0;
             const localTimestamp = existing.lastReadAt || 0;
 
+            const hasCloudCover = isValidCoverUrl(cBook.coverUrl);
+            const hasLocalCover = isValidCoverUrl(existing.coverUrl);
+
+            // Prioriza capa válida da nuvem se o local não tiver ou se a nuvem tiver capa personalizada
+            let resolvedCover = existing.coverUrl;
+            if (hasCloudCover && (!hasLocalCover || cBook.customCoverApplied)) {
+              resolvedCover = cBook.coverUrl;
+            }
+
             const shouldUpdateMeta = cloudTimestamp >= localTimestamp;
             const updatedBook: Book = {
               ...existing,
               title: cBook.title || existing.title,
               author: cBook.author || existing.author,
               category: cBook.category || existing.category,
-              coverUrl: cBook.coverUrl || existing.coverUrl,
+              coverUrl: resolvedCover,
+              customCoverApplied: cBook.customCoverApplied !== undefined ? cBook.customCoverApplied : existing.customCoverApplied,
               progressPercent: shouldUpdateMeta ? cBook.progressPercent : existing.progressPercent,
               currentChapterIndex: shouldUpdateMeta ? cBook.currentChapterIndex : existing.currentChapterIndex,
               currentParagraphIndex: shouldUpdateMeta ? cBook.currentParagraphIndex : existing.currentParagraphIndex,
@@ -119,6 +129,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             };
 
             await saveBook(updatedBook);
+
+            // Se o computador local possui capa válida mas a nuvem não tinha capa, envia a capa para a nuvem
+            // para que a versão mobile no celular carregue a capa original instantaneamente!
+            if (hasLocalCover && !hasCloudCover && !isQuotaExceeded()) {
+              syncBookToCloud(currentUser.uid, updatedBook).catch(() => {});
+            }
+
+            // Se ainda assim estiver sem capa válida no dispositivo atual (ex: celular), repara em segundo plano
+            if (!isValidCoverUrl(updatedBook.coverUrl)) {
+              repairMissingBookCover(updatedBook).then((cov) => {
+                if (cov) {
+                  updatedBook.coverUrl = cov;
+                  saveBook(updatedBook);
+                  if (typeof window !== 'undefined') {
+                    window.dispatchEvent(new CustomEvent('aurabooks_book_updated', { detail: updatedBook }));
+                  }
+                }
+              }).catch(() => {});
+            }
 
             // Se for EPUB ou PDF e ainda não tiver o arquivo físico neste PC, tenta obter da nuvem ou Google Drive
             if (cBook.format === 'epub' || cBook.format === 'pdf') {
@@ -137,7 +166,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               }
             }
           } else {
-            // Livro novo vindo de outro computador!
+            // Livro novo vindo de outro computador ou da nuvem!
             setSyncMessage(`Importando "${cBook.title}" deste PC...`);
 
             const newBook: Book = {
@@ -145,7 +174,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               title: cBook.title || 'Livro da Nuvem',
               author: cBook.author || 'Autor desconhecido',
               format: cBook.format || 'epub',
-              coverUrl: cBook.coverUrl || '',
+              coverUrl: isValidCoverUrl(cBook.coverUrl) ? cBook.coverUrl : '',
+              customCoverApplied: !!cBook.customCoverApplied,
               chapters: [], // O leitor Foliate.js usa diretamente o arquivo EPUB
               totalWords: cBook.totalWords || 0,
               estimatedReadingMinutes: Math.max(1, Math.round((cBook.totalWords || 0) / 220)),
@@ -171,6 +201,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
             await saveBook(newBook);
 
+            // Se o livro novo da nuvem ainda não tiver capa no banco local, repara em segundo plano
+            if (!isValidCoverUrl(newBook.coverUrl)) {
+              repairMissingBookCover(newBook).then((cov) => {
+                if (cov) {
+                  newBook.coverUrl = cov;
+                  saveBook(newBook);
+                  if (typeof window !== 'undefined') {
+                    window.dispatchEvent(new CustomEvent('aurabooks_book_updated', { detail: newBook }));
+                  }
+                }
+              }).catch(() => {});
+            }
+
             // Baixa o arquivo do livro se disponível
             if (cBook.format === 'epub' || cBook.format === 'pdf') {
               if (cBook.hasCloudFile) {
@@ -188,7 +231,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
       }
 
-      // 2. Local -> Nuvem (Backup dos livros locais que ainda não estão na nuvem)
+      // 2. Local -> Nuvem (Backup dos livros locais que ainda não estão na nuvem ou que estão sem capa na nuvem)
       const currentLocalBooks = await getAllBooks();
       for (const lBook of currentLocalBooks) {
         if (isQuotaExceeded()) {
@@ -198,8 +241,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const isSample = SAMPLE_IDS.includes(lBook.id) || lBook.id.startsWith('sample-');
         if (isSample) continue;
 
-        const existsInCloud = cloudBooks?.some(cb => cb.bookId === lBook.id);
-        if (!existsInCloud) {
+        const cloudBook = cloudBooks?.find(cb => cb.bookId === lBook.id);
+        if (!cloudBook) {
           if (!isQuotaExceeded()) {
             setSyncMessage(`Enviando "${lBook.title}" para a nuvem...`);
             await syncBookToCloud(currentUser.uid, lBook);
@@ -210,9 +253,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             }
           }
         } else {
+          // Livro já está na nuvem: verifica se a capa local precisa ser enviada para a nuvem
+          // (ex: capa extraída no computador mas não sincronizada anteriormente com o celular)
+          const localHasCover = isValidCoverUrl(lBook.coverUrl);
+          const cloudHasCover = isValidCoverUrl(cloudBook.coverUrl);
+
+          if (localHasCover && (!cloudHasCover || lBook.customCoverApplied) && !isQuotaExceeded()) {
+            setSyncMessage(`Sincronizando capa de "${lBook.title}" com o celular...`);
+            await syncBookToCloud(currentUser.uid, lBook);
+          }
+
           if (!lBook.syncedToCloud) {
             lBook.syncedToCloud = true;
-            lBook.hasCloudFile = !!cloudBooks?.find(cb => cb.bookId === lBook.id)?.hasCloudFile;
+            lBook.hasCloudFile = !!cloudBook.hasCloudFile;
             await saveBook(lBook);
           }
         }

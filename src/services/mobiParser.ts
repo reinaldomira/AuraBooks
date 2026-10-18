@@ -3,6 +3,7 @@ import { MOBI } from 'foliate-js/mobi.js';
 // @ts-ignore
 import * as fflate from 'foliate-js/vendor/fflate.js';
 import { Book, Chapter } from '../types/book';
+import { optimizeCoverImage, fetchOnlineCover, generatePublisherCanvasCover } from './coverService';
 
 function cleanText(text: string): string {
   return text
@@ -94,14 +95,7 @@ export async function parseMobiOrAzw3File(file: File | Blob, originalFileName?: 
   try {
     const coverBlob = await bookData.getCover?.();
     if (coverBlob && coverBlob.size > 0) {
-      coverUrl = await new Promise<string>((resolve) => {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          resolve(typeof reader.result === 'string' ? reader.result : '');
-        };
-        reader.onerror = () => resolve('');
-        reader.readAsDataURL(coverBlob);
-      });
+      coverUrl = await optimizeCoverImage(coverBlob);
     }
   } catch (coverErr) {
     console.warn('Não foi possível extrair capa do MOBI/AZW3:', coverErr);
@@ -163,6 +157,22 @@ export async function parseMobiOrAzw3File(file: File | Blob, originalFileName?: 
   else if (lowerTitle.includes('conto') || lowerTitle.includes('poesia') || lowerDesc.includes('poesia')) category = 'Poesia & Contos';
   else if (lowerTitle.includes('ficção') || lowerDesc.includes('sci-fi') || lowerDesc.includes('fantasia')) category = 'Ficção & Fantasia';
   else if (language.startsWith('pt')) category = 'Literatura em Português';
+
+  // Se ainda não tiver capa, busca online ou gera capa editorial em Canvas
+  if (!coverUrl || coverUrl.length < 50) {
+    try {
+      const online = await fetchOnlineCover(title, author);
+      if (online && online.length > 50) {
+        coverUrl = online;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  if (!coverUrl || coverUrl.length < 50) {
+    coverUrl = generatePublisherCanvasCover(title, author, format, category);
+  }
 
   return {
     id: `user-book-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,

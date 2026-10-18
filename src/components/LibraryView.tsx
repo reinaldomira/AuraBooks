@@ -4,7 +4,7 @@ import {
   Trash2, Headphones, Sparkles, Filter, ChevronRight,
   BookMarked, Check, Info, Flame, Bookmark, Quote, 
   Share2, Plus, LayoutGrid, List as ListIcon, Award,
-  Upload, AlertTriangle, AlertCircle, X, Tag, FolderPlus, ArrowUpDown, Cloud, Loader2, ShieldCheck
+  Upload, AlertTriangle, AlertCircle, X, Tag, FolderPlus, ArrowUpDown, Cloud, Loader2, ShieldCheck, ImagePlus
 } from 'lucide-react';
 import { Book } from '../types/book';
 import { useAudioReader } from '../context/AudioReaderContext';
@@ -15,7 +15,9 @@ import {
   restoreBookFromDrive, syncBookToDrive, importBooksFromDrive, 
   ImportDriveProgress, ImportDriveResult 
 } from '../services/googleDriveService';
-import { repairAllMissingCovers, repairMissingBookCover } from '../services/coverService';
+import { repairAllMissingCovers, repairMissingBookCover, isValidCoverUrl } from '../services/coverService';
+import { BookCover } from './BookCover';
+import { ChangeCoverModal } from './ChangeCoverModal';
 
 export type SortOption = 'lastRead' | 'recent' | 'oldest' | 'titleAsc' | 'titleDesc';
 export type FilterTab = 'todos' | 'lendo' | 'nao-iniciados' | 'concluidos' | 'favoritos' | 'nuvem' | string;
@@ -112,6 +114,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   const [sortBy, setSortBy] = useState<SortOption>('lastRead');
   const [bookToDelete, setBookToDelete] = useState<Book | null>(null);
   const [taggingBook, setTaggingBook] = useState<Book | null>(null);
+  const [changingCoverBook, setChangingCoverBook] = useState<Book | null>(null);
   const [isCreatingTag, setIsCreatingTag] = useState(false);
   const [newTagName, setNewTagName] = useState('');
 
@@ -136,13 +139,13 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   const [repairCoverMsg, setRepairCoverMsg] = useState('');
 
   const booksWithoutCoverCount = useMemo(() => {
-    return books.filter(b => !b.coverUrl || b.coverUrl.trim().length < 50).length;
+    return books.filter(b => !isValidCoverUrl(b.coverUrl)).length;
   }, [books]);
 
-  // Auto-recuperação de capas em segundo plano quando o usuário acessa em outro computador
+  // Auto-recuperação de capas em segundo plano quando o usuário acessa em outro computador ou celular
   useEffect(() => {
     let isCancelled = false;
-    const hasMissingCovers = books.some(b => !b.coverUrl || b.coverUrl.trim().length < 50);
+    const hasMissingCovers = books.some(b => !isValidCoverUrl(b.coverUrl));
     if (hasMissingCovers) {
       const timer = setTimeout(async () => {
         try {
@@ -546,7 +549,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                     </span>
                   </h4>
                   <p className="text-[11.5px] text-stone-600 font-sans mt-0.5">
-                    Como você acessou de outro computador, as capas originais podem ser recarregadas diretamente dos arquivos do Google Drive ou do leitor.
+                    Sincronize ou recarregue as capas dos livros para visualização no computador e no celular.
                   </p>
                 </div>
               </div>
@@ -582,40 +585,12 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                     onClick={() => onOpenBook(currentReadingBook)}
                     className="relative w-36 sm:w-44 aspect-[3/4] bg-stone-100 rounded-lg shadow-md overflow-hidden shrink-0 cursor-pointer group"
                   >
-                    <div className="absolute top-0 left-3 w-4 h-9 bg-[#9A3412] shadow-sm z-10 clip-ribbon" />
-
-                    {currentReadingBook.coverUrl ? (
-                      <img
-                        src={currentReadingBook.coverUrl}
-                        alt={currentReadingBook.title}
-                        referrerPolicy="no-referrer"
-                        onError={async (e) => {
-                          e.currentTarget.style.display = 'none';
-                          const recovered = await repairMissingBookCover(currentReadingBook);
-                          if (recovered && onRefreshBooks) {
-                            onRefreshBooks();
-                          }
-                        }}
-                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                      />
-                    ) : (
-                      <div className="w-full h-full p-4 flex flex-col justify-between bg-gradient-to-br from-stone-900 via-stone-850 to-stone-950 text-stone-100 relative">
-                        <div className="flex items-center justify-between">
-                          <span className="text-[10px] uppercase font-sans font-bold tracking-wider px-1.5 py-0.5 rounded bg-amber-400/20 text-amber-300 border border-amber-400/30">
-                            {currentReadingBook.format.toUpperCase()}
-                          </span>
-                          <BookOpen className="w-3.5 h-3.5 text-amber-300/70" />
-                        </div>
-                        <div className="space-y-1">
-                          <h3 className="font-serif-display font-bold text-sm leading-snug line-clamp-3 text-amber-50">
-                            {currentReadingBook.title}
-                          </h3>
-                          <div className="w-6 h-0.5 bg-amber-500/40 rounded-full" />
-                        </div>
-                        <span className="text-xs text-stone-400 truncate block">{currentReadingBook.author}</span>
-                      </div>
-                    )}
-                    <div className="absolute left-0 top-0 bottom-0 w-2.5 bg-gradient-to-r from-black/40 via-white/10 to-transparent pointer-events-none" />
+                    <div className="absolute top-0 left-3 w-4 h-9 bg-[#9A3412] shadow-sm z-10 clip-ribbon pointer-events-none" />
+                    <BookCover
+                      book={currentReadingBook}
+                      imgClassName="group-hover:scale-105"
+                      onCoverRepaired={(cov) => { currentReadingBook.coverUrl = cov; }}
+                    />
                   </div>
 
                   {/* Conteúdo */}
@@ -1186,41 +1161,13 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                       {/* Cover Area */}
                       <div 
                         onClick={() => onOpenDetails(book)}
-                        className="relative aspect-[3/4] bg-stone-100 rounded-lg overflow-hidden border border-stone-200 shadow-2xs cursor-pointer"
+                        className="relative aspect-[3/4] bg-stone-100 rounded-lg overflow-hidden border border-stone-200 shadow-2xs cursor-pointer group"
                       >
-                        {book.coverUrl ? (
-                          <img 
-                            src={book.coverUrl} 
-                            alt={book.title} 
-                            referrerPolicy="no-referrer"
-                            onError={async (e) => {
-                              e.currentTarget.style.display = 'none';
-                              const recovered = await repairMissingBookCover(book);
-                              if (recovered && onRefreshBooks) {
-                                onRefreshBooks();
-                              }
-                            }}
-                            className="w-full h-full object-cover group-hover:scale-103 transition-transform" 
-                          />
-                        ) : (
-                          <div className="w-full h-full p-3 sm:p-4 flex flex-col justify-between bg-gradient-to-br from-stone-900 via-stone-850 to-stone-950 text-stone-100 relative">
-                            {/* Lombada clássica */}
-                            <div className="absolute left-0 top-0 bottom-0 w-2 bg-gradient-to-r from-black/50 via-white/10 to-transparent pointer-events-none" />
-                            <div className="flex items-center justify-between">
-                              <span className="text-[9px] uppercase font-sans font-bold tracking-wider px-1.5 py-0.2 rounded bg-amber-400/20 text-amber-300 border border-amber-400/30">
-                                {book.format.toUpperCase()}
-                              </span>
-                              <BookOpen className="w-3 h-3 text-amber-300/60" />
-                            </div>
-                            <div className="space-y-1">
-                              <h4 className="font-serif-display font-bold text-xs line-clamp-3 leading-snug text-amber-50">
-                                {book.title}
-                              </h4>
-                              <div className="w-5 h-0.5 bg-amber-500/40 rounded-full" />
-                            </div>
-                            <span className="text-[9.5px] sm:text-[10px] text-stone-400 font-sans truncate block">{book.author}</span>
-                          </div>
-                        )}
+                        <BookCover
+                          book={book}
+                          imgClassName="group-hover:scale-103"
+                          onCoverRepaired={(cov) => { book.coverUrl = cov; }}
+                        />
 
                         {/* Status Badge: Concluído */}
                         {isCompleted && (
@@ -1439,6 +1386,15 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                             title="Gerenciar coleções deste livro"
                           >
                             <Tag className="w-3.5 h-3.5" />
+                          </button>
+
+                          {/* Botão para carregar ou alterar capa do livro */}
+                          <button
+                            onClick={() => setChangingCoverBook(book)}
+                            className="p-1.5 rounded text-stone-500 hover:text-amber-900 hover:bg-amber-50 border border-stone-200 transition-colors cursor-pointer"
+                            title="Carregar imagem ou alterar capa deste livro"
+                          >
+                            <ImagePlus className="w-3.5 h-3.5 text-amber-800" />
                           </button>
 
                           <button
@@ -1678,6 +1634,19 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
             </div>
           </div>
         </div>
+      )}
+
+      {/* Modal para Carregar ou Alterar Capa do Livro na Estante */}
+      {changingCoverBook && (
+        <ChangeCoverModal
+          book={changingCoverBook}
+          isOpen={true}
+          onClose={() => setChangingCoverBook(null)}
+          onCoverUpdated={async () => {
+            if (onRefreshBooks) await onRefreshBooks();
+            setChangingCoverBook(null);
+          }}
+        />
       )}
     </div>
   );

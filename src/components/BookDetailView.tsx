@@ -1,17 +1,19 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   ArrowLeft, BookOpen, Headphones, Share2, Bookmark, 
   Clock, CheckCircle2, Star, ThumbsUp, MessageSquare, 
   ChevronRight, Sparkles, Layers, Quote, Trash2, AlertTriangle, AlertCircle, 
-  Tag, Plus, Cloud, Loader2, RefreshCw, Check, BrainCircuit, BookText
+  Tag, Plus, Cloud, Loader2, RefreshCw, Check, BrainCircuit, BookText, Upload, Image as ImageIcon, Search
 } from 'lucide-react';
 import { Book } from '../types/book';
 import { useAuth } from '../context/AuthContext';
 import { TagManagerModal } from './TagManagerModal';
 import { syncBookToDrive } from '../services/googleDriveService';
 import { hasOriginalEpub } from '../services/epubStorageService';
-import { repairMissingBookCover } from '../services/coverService';
+import { repairMissingBookCover, setCustomBookCover, removeCustomBookCover, isValidCoverUrl } from '../services/coverService';
 import { enrichBookDetailsWithAI } from '../services/aiBookDetailsService';
+import { BookCover } from './BookCover';
+import { ChangeCoverModal } from './ChangeCoverModal';
 
 interface BookDetailViewProps {
   book: Book;
@@ -45,6 +47,10 @@ export const BookDetailView: React.FC<BookDetailViewProps> = ({
   const [driveSyncMsg, setDriveSyncMsg] = useState('');
   const [driveSyncError, setDriveSyncError] = useState<string | null>(null);
   const [isLocalEpub, setIsLocalEpub] = useState<boolean | null>(null);
+
+  // Modal para carregar e alterar capa
+  const [isChangeCoverModalOpen, setIsChangeCoverModalOpen] = useState(false);
+  const [changeCoverDefaultTab, setChangeCoverDefaultTab] = useState<'upload' | 'url' | 'search'>('upload');
 
   // Estados de enriquecimento por IA
   const [isEnrichingAI, setIsEnrichingAI] = useState(false);
@@ -99,7 +105,7 @@ export const BookDetailView: React.FC<BookDetailViewProps> = ({
     }
 
     // Se o livro estiver sem capa neste dispositivo, tenta recuperá-la
-    if (!currentBook.coverUrl || currentBook.coverUrl.trim().length < 50) {
+    if (!isValidCoverUrl(currentBook.coverUrl)) {
       repairMissingBookCover(currentBook).then(cov => {
         if (isMounted && cov && onRefreshBooks) {
           onRefreshBooks();
@@ -135,6 +141,30 @@ export const BookDetailView: React.FC<BookDetailViewProps> = ({
       setTimeout(() => setEnrichStatusMsg(null), 3000);
     } finally {
       setIsEnrichingAI(false);
+    }
+  };
+
+  const [isRefreshingCover, setIsRefreshingCover] = useState(false);
+  const [coverStatusMsg, setCoverStatusMsg] = useState<string | null>(null);
+
+  const handleRefreshCover = async () => {
+    if (isRefreshingCover) return;
+    setIsRefreshingCover(true);
+    setCoverStatusMsg('Pesquisando capa oficial nos acervos...');
+    try {
+      const newCover = await repairMissingBookCover(currentBook, { forceOnline: true });
+      if (newCover) {
+        setCurrentBook(prev => ({ ...prev, coverUrl: newCover }));
+        setCoverStatusMsg('✓ Capa atualizada!');
+        if (onRefreshBooks) await onRefreshBooks();
+      } else {
+        setCoverStatusMsg('Capa mantida.');
+      }
+    } catch {
+      setCoverStatusMsg('Falha ao atualizar capa.');
+    } finally {
+      setIsRefreshingCover(false);
+      setTimeout(() => setCoverStatusMsg(null), 3000);
     }
   };
 
@@ -272,45 +302,87 @@ export const BookDetailView: React.FC<BookDetailViewProps> = ({
         {/* Left Column: 3D Book Cover & Primary CTAs */}
         <div className="lg:col-span-4 space-y-6">
           {/* Book Cover Frame */}
-          <div className="relative aspect-[3/4] rounded-2xl bg-white p-3 border border-[#E8E2D9] shadow-lg group">
-            {/* Ribbon dinâmico */}
-            <div className="absolute top-5 right-5 bg-amber-950/85 backdrop-blur-xs text-amber-200 text-[10px] uppercase font-sans font-bold px-2 py-0.5 rounded shadow-xs z-10 flex items-center gap-1">
-              <Sparkles className="w-3 h-3 text-amber-400" />
-              <span>{realCuratorBadge}</span>
+          <div className="space-y-3">
+            <div className="relative aspect-[3/4] rounded-2xl bg-white p-3 border border-[#E8E2D9] shadow-lg group">
+              {/* Ribbon dinâmico */}
+              <div className="absolute top-5 right-5 bg-amber-950/85 backdrop-blur-xs text-amber-200 text-[10px] uppercase font-sans font-bold px-2 py-0.5 rounded shadow-xs z-10 flex items-center gap-1">
+                <Sparkles className="w-3 h-3 text-amber-400" />
+                <span>{realCuratorBadge}</span>
+              </div>
+
+              <div className="w-full h-full rounded-xl overflow-hidden bg-stone-100 shadow-inner relative group">
+                <BookCover
+                  book={currentBook}
+                  imgClassName="group-hover:scale-103"
+                  onCoverRepaired={(newCover) => {
+                    setCurrentBook(prev => ({ ...prev, coverUrl: newCover }));
+                    if (onRefreshBooks) onRefreshBooks();
+                  }}
+                />
+
+                {/* Botão overlay ao passar o mouse sobre a capa */}
+                <button
+                  onClick={() => {
+                    setChangeCoverDefaultTab('upload');
+                    setIsChangeCoverModalOpen(true);
+                  }}
+                  className="absolute inset-0 bg-stone-950/45 backdrop-blur-2xs opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-1.5 text-white font-sans text-xs font-semibold cursor-pointer z-20"
+                  title="Alterar capa deste livro"
+                >
+                  <div className="w-9 h-9 rounded-full bg-white/20 backdrop-blur-xs flex items-center justify-center shadow-md">
+                    <Upload className="w-4 h-4 text-white" />
+                  </div>
+                  <span>Alterar Capa</span>
+                </button>
+              </div>
             </div>
 
-            <div className="w-full h-full rounded-xl overflow-hidden bg-stone-100 shadow-inner relative">
-              {currentBook.coverUrl ? (
-                <img
-                  src={currentBook.coverUrl}
-                  alt={currentBook.title}
-                  referrerPolicy="no-referrer"
-                  onError={async (e) => {
-                    e.currentTarget.style.display = 'none';
-                    const recovered = await repairMissingBookCover(currentBook);
-                    if (recovered && onRefreshBooks) {
-                      onRefreshBooks();
-                    }
+            {/* Ações dedicadas para carregar ou buscar capa */}
+            <div className="space-y-2 px-1">
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => {
+                    setChangeCoverDefaultTab('upload');
+                    setIsChangeCoverModalOpen(true);
                   }}
-                  className="w-full h-full object-cover group-hover:scale-103 transition-transform duration-300"
-                />
-              ) : (
-                <div className="w-full h-full p-6 flex flex-col justify-between bg-gradient-to-br from-stone-900 via-stone-850 to-stone-950 text-stone-100 relative">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs uppercase text-amber-300 font-sans tracking-widest font-semibold px-2 py-0.5 rounded bg-amber-400/20 border border-amber-400/30">
-                      {currentBook.format.toUpperCase()}
-                    </span>
-                    <BookOpen className="w-4 h-4 text-amber-300/70" />
-                  </div>
-                  <div className="space-y-2">
-                    <h3 className="font-serif-display font-bold text-xl text-amber-50 leading-tight">{currentBook.title}</h3>
-                    <div className="w-8 h-0.5 bg-amber-500/50 rounded-full" />
-                  </div>
-                  <span className="text-xs text-stone-400 font-sans">{currentBook.author}</span>
+                  className="py-2 px-3 bg-white hover:bg-stone-50 border border-stone-300 hover:border-amber-700 text-stone-900 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs transition-colors"
+                  title="Carregar imagem do seu computador ou celular"
+                >
+                  <Upload className="w-3.5 h-3.5 text-amber-800" />
+                  <span>Carregar Capa</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    setChangeCoverDefaultTab('search');
+                    setIsChangeCoverModalOpen(true);
+                  }}
+                  className="py-2 px-3 bg-[#FBF7F0] hover:bg-[#F5EDE0] border border-[#E8DEC8] text-amber-950 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
+                  title="Buscar capa oficial em alta definição nos acervos públicos"
+                >
+                  <Search className="w-3.5 h-3.5 text-amber-800" />
+                  <span>Buscar na Web</span>
+                </button>
+              </div>
+
+              {currentBook.customCoverApplied && (
+                <div className="flex items-center justify-between text-[11px] text-stone-500 font-sans px-1 pt-0.5">
+                  <span className="text-emerald-700 font-medium flex items-center gap-1">
+                    <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                    Capa personalizada
+                  </span>
+                  <button
+                    onClick={async () => {
+                      const restored = await removeCustomBookCover(currentBook);
+                      setCurrentBook(prev => ({ ...prev, coverUrl: restored, customCoverApplied: false }));
+                      if (onRefreshBooks) await onRefreshBooks();
+                    }}
+                    className="text-stone-400 hover:text-rose-700 font-medium cursor-pointer"
+                  >
+                    Restaurar original
+                  </button>
                 </div>
               )}
-              {/* Spine highlight */}
-              <div className="absolute left-0 top-0 bottom-0 w-3 bg-gradient-to-r from-black/40 via-white/10 to-transparent pointer-events-none" />
             </div>
           </div>
 
@@ -901,6 +973,18 @@ export const BookDetailView: React.FC<BookDetailViewProps> = ({
           onCreateTag={onCreateTag}
         />
       )}
+
+      {/* Modal para Carregar ou Alterar Capa do Livro */}
+      <ChangeCoverModal
+        book={currentBook}
+        isOpen={isChangeCoverModalOpen}
+        defaultTab={changeCoverDefaultTab}
+        onClose={() => setIsChangeCoverModalOpen(false)}
+        onCoverUpdated={(updatedBook, newCoverUrl) => {
+          setCurrentBook({ ...updatedBook, coverUrl: newCoverUrl });
+          if (onRefreshBooks) onRefreshBooks();
+        }}
+      />
     </div>
   );
 };

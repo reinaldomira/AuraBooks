@@ -30,6 +30,7 @@ import { deleteOriginalEpub, hasOriginalEpub } from './services/epubStorageServi
 import { deleteBookFromCloud } from './services/firebase';
 import { restoreBookFromDrive } from './services/googleDriveService';
 import { startAutoBackupService, stopAutoBackupService } from './services/googleDriveBackupService';
+import { repairAllMissingCovers, isValidCoverUrl } from './services/coverService';
 
 const AppContent: React.FC = () => {
   const [books, setBooks] = useState<Book[]>([]);
@@ -72,6 +73,19 @@ const AppContent: React.FC = () => {
           setSelectedBook(defaultBook);
           loadBook(defaultBook);
         }
+
+        // Se houver algum livro sem capa, repara em segundo plano
+        if (initialBooks.some(b => !isValidCoverUrl(b.coverUrl))) {
+          setTimeout(async () => {
+            try {
+              const res = await repairAllMissingCovers();
+              if (res.repairedCount > 0) {
+                const refreshed = await getAllBooks();
+                setBooks(refreshed);
+              }
+            } catch {}
+          }, 800);
+        }
         const settings = await getReaderSettings();
         setReaderSettings(settings);
       } catch (err) {
@@ -107,6 +121,24 @@ const AppContent: React.FC = () => {
       refreshBooks();
     }
   }, [isSyncing, user]);
+
+  // Atualiza livro individual reativamente quando capa ou metadados são salvos em segundo plano
+  useEffect(() => {
+    const handleBookUpdated = (e: CustomEvent<Book>) => {
+      if (e.detail && e.detail.id) {
+        setBooks((prev) =>
+          prev.map((b) => (b.id === e.detail.id ? { ...b, ...e.detail } : b))
+        );
+        setSelectedBook((prev) =>
+          prev && prev.id === e.detail.id ? { ...prev, ...e.detail } : prev
+        );
+      }
+    };
+    window.addEventListener('aurabooks_book_updated', handleBookUpdated as EventListener);
+    return () => {
+      window.removeEventListener('aurabooks_book_updated', handleBookUpdated as EventListener);
+    };
+  }, []);
 
   const handleOpenReader = async (book: Book) => {
     // Carrega a versão mais atual diretamente do banco IndexedDB para garantir que progresso e CFI recentes sejam usados

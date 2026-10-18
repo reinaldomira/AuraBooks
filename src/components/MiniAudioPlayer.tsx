@@ -1,6 +1,7 @@
 import React from 'react';
 import { Play, Pause, BookOpen, X, Headphones, Gauge } from 'lucide-react';
 import { useAudioReader } from '../context/AudioReaderContext';
+import { BookCover } from './BookCover';
 
 interface MiniAudioPlayerProps {
   onOpenReader: () => void;
@@ -30,18 +31,7 @@ export const MiniAudioPlayer: React.FC<MiniAudioPlayerProps> = ({ onOpenReader }
           onClick={onOpenReader}
           className="w-12 h-16 rounded-md bg-stone-800 overflow-hidden shrink-0 border border-stone-700 cursor-pointer relative group"
         >
-          {currentBook.coverUrl ? (
-            <img
-              src={currentBook.coverUrl}
-              alt={currentBook.title}
-              referrerPolicy="no-referrer"
-              className="w-full h-full object-cover group-hover:scale-105 transition-transform"
-            />
-          ) : (
-            <div className="w-full h-full flex items-center justify-center bg-stone-800 text-stone-400">
-              <Headphones className="w-5 h-5 text-amber-400" />
-            </div>
-          )}
+          <BookCover book={currentBook} />
           {isPlaying && !isPaused && (
             <div className="absolute inset-0 bg-stone-950/40 flex items-center justify-center">
               <span className="flex items-center gap-0.5">

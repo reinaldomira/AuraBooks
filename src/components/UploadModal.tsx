@@ -11,6 +11,7 @@ import { useAuth } from '../context/AuthContext';
 import { findBookByName, uploadBookToDrive, isDriveAuthorized } from '../services/googleDriveService';
 import { requestGoogleDriveAccessToken } from '../services/firebase';
 import { generatePdfFromBook } from '../services/pdfGenerator';
+import { repairMissingBookCover, isValidCoverUrl } from '../services/coverService';
 
 interface UploadModalProps {
   isOpen: boolean;
@@ -130,6 +131,15 @@ export const UploadModal: React.FC<UploadModalProps> = ({
         book = await parseTxtFile(file);
       } else {
         throw new Error('Formato não suportado.');
+      }
+
+      // Garante capa válida de alta resolução antes de salvar
+      if (!isValidCoverUrl(book.coverUrl)) {
+        setStatusMessage('Gerando capa editorial de alta definição...');
+        const resolvedCover = await repairMissingBookCover(book);
+        if (resolvedCover) {
+          book.coverUrl = resolvedCover;
+        }
       }
 
       setStatusMessage('✓ Livro salvo com segurança na biblioteca local...');

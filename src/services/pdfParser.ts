@@ -1,6 +1,7 @@
 import * as pdfjsLib from 'pdfjs-dist';
 import pdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { Book, Chapter } from '../types/book';
+import { generatePublisherCanvasCover, fetchOnlineCover, isValidCoverUrl } from './coverService';
 
 // Set up worker locally via Vite asset bundler
 try {
@@ -177,6 +178,18 @@ export async function parsePdfFile(file: File): Promise<Book> {
   const totalWords = chapters.reduce((acc, ch) => acc + ch.wordCount, 0);
   const estimatedReadingMinutes = Math.max(1, Math.round(totalWords / 220));
   const estimatedAudioMinutes = Math.max(1, Math.round(totalWords / 150));
+
+  // Se a primeira página do PDF não gerou capa ou falhou, busca online ou gera em Canvas
+  if (!isValidCoverUrl(coverUrl)) {
+    try {
+      const online = await fetchOnlineCover(title, author);
+      if (isValidCoverUrl(online)) coverUrl = online!;
+    } catch {}
+  }
+
+  if (!isValidCoverUrl(coverUrl)) {
+    coverUrl = generatePublisherCanvasCover(title, author, 'pdf', 'Documentos & PDFs');
+  }
 
   return {
     id: `user-book-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,

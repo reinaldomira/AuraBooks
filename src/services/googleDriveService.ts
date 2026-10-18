@@ -14,7 +14,7 @@ import { hasOriginalEpub, saveOriginalEpub, getOriginalEpub } from './epubStorag
 import { parseEpubFile } from './epubParser';
 import { parsePdfFile } from './pdfParser';
 import { parseMobiOrAzw3File } from './mobiParser';
-import { extractCoverFromFile } from './coverService';
+import { extractCoverFromFile, repairMissingBookCover } from './coverService';
 import { generatePdfFromBook } from './pdfGenerator';
 import { Book } from '../types/book';
 
@@ -609,25 +609,23 @@ export async function importBooksFromDrive(
           existingBlob = await getOriginalEpub(existing.id);
         }
 
-        // Se a capa estiver ausente ou quebrada no livro existente, extrai do arquivo
+        // Se a capa estiver ausente ou quebrada no livro existente, recupera
         if (!existing.coverUrl || existing.coverUrl.trim().length < 100) {
-          if (existingBlob) {
-            try {
-              if (onProgress) {
-                onProgress({
-                  step: `Extraindo capa de "${existing.title}"...`,
-                  current: i + 1,
-                  total: bookFiles.length,
-                  bookTitle: existing.title
-                });
-              }
-              const extractedCover = await extractCoverFromFile(existingBlob, existing.format || file.name);
-              if (extractedCover && extractedCover.length > 50) {
-                existing.coverUrl = extractedCover;
-              }
-            } catch (covErr) {
-              console.warn(`Aviso ao extrair capa para "${existing.title}":`, covErr);
+          try {
+            if (onProgress) {
+              onProgress({
+                step: `Extraindo/recuperando capa de "${existing.title}"...`,
+                current: i + 1,
+                total: bookFiles.length,
+                bookTitle: existing.title
+              });
             }
+            const repaired = await repairMissingBookCover(existing);
+            if (repaired) {
+              existing.coverUrl = repaired;
+            }
+          } catch (covErr) {
+            console.warn(`Aviso ao extrair capa para "${existing.title}":`, covErr);
           }
         }
 
@@ -699,12 +697,12 @@ export async function importBooksFromDrive(
           };
         }
 
-        // Se ainda não tiver capa, garante a extração pelo coverService
+        // Se ainda não tiver capa, garante a recuperação pelo coverService
         if (!newBook.coverUrl || newBook.coverUrl.trim().length < 100) {
           try {
-            const extracted = await extractCoverFromFile(blob, bookFormat);
-            if (extracted && extracted.length > 50) {
-              newBook.coverUrl = extracted;
+            const repaired = await repairMissingBookCover(newBook);
+            if (repaired) {
+              newBook.coverUrl = repaired;
             }
           } catch {
             // ignore
