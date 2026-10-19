@@ -104,7 +104,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   onOpenBackupModal,
 }) => {
   const { currentBook, isPlaying, isPaused, togglePlayPause } = useAudioReader();
-  const { user, login, isBookInCloud } = useAuth();
+  const { user, login, isBookInCloud, syncAll, isSyncing } = useAuth();
 
   const isCloudBook = (book: Book) => {
     return !!book.syncedToCloud || !!book.driveFileId || (isBookInCloud ? isBookInCloud(book.id) : false);
@@ -174,6 +174,13 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
       });
       if (onRefreshBooks) {
         await onRefreshBooks();
+      }
+      if (user && syncAll) {
+        setRepairCoverMsg('Sincronizando capas com seu celular...');
+        await syncAll();
+        if (onRefreshBooks) {
+          await onRefreshBooks();
+        }
       }
     } catch (err: any) {
       console.warn('Erro ao reparar capas:', err);
@@ -908,6 +915,24 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                       <Sparkles className="w-3.5 h-3.5 text-amber-800" />
                     )}
                     <span>Carregar Capas ({booksWithoutCoverCount})</span>
+                  </button>
+                )}
+
+                {/* Botão Sincronizar Capas e Biblioteca com o Celular */}
+                {user && (
+                  <button
+                    onClick={async () => {
+                      if (syncAll) {
+                        await syncAll();
+                        if (onRefreshBooks) await onRefreshBooks();
+                      }
+                    }}
+                    disabled={isSyncing}
+                    className="px-3.5 py-1.5 bg-[#FAF6F0] hover:bg-[#F3ECE0] text-stone-900 border border-[#E8DFD1] rounded-xl text-xs font-semibold font-sans shadow-2xs transition-colors flex items-center gap-1.5 cursor-pointer disabled:opacity-75"
+                    title="Sincronizar capas e biblioteca imediatamente entre computador e celular"
+                  >
+                    <Cloud className={`w-3.5 h-3.5 ${isSyncing ? 'text-amber-600 animate-pulse' : 'text-emerald-700'}`} />
+                    <span>{isSyncing ? 'Sincronizando...' : 'Sincronizar Celular'}</span>
                   </button>
                 )}
 

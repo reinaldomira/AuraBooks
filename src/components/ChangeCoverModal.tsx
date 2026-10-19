@@ -150,18 +150,31 @@ export const ChangeCoverModal: React.FC<ChangeCoverModalProps> = ({
     setIsProcessing(true);
     setErrorMessage(null);
     try {
-      const newCover = await setCustomBookCover(book, selectedFile);
-      const updatedBook: Book = { ...book, coverUrl: newCover, customCoverApplied: true };
-      setSuccessMessage('✓ Capa atualizada e otimizada com sucesso!');
+      const result = await setCustomBookCover(book, selectedFile);
+      const newCover = result.coverUrl;
+      const updatedBook: Book = { 
+        ...book, 
+        coverUrl: newCover, 
+        customCoverApplied: true,
+        isCanvasCover: false,
+        coverUpdatedAt: result.coverUpdatedAt || book.coverUpdatedAt || Date.now(),
+      };
+
+      if (result.cloudSynced) {
+        setSuccessMessage('✓ Capa salva e sincronizada na nuvem com sucesso!');
+      } else {
+        setSuccessMessage('✓ Capa salva localmente. A sincronização com a nuvem não foi concluída (offline ou limite de cota).');
+      }
+
       onCoverUpdated(updatedBook, newCover);
       setTimeout(() => {
         onClose();
         setSuccessMessage(null);
         setSelectedFile(null);
         setPreviewUrl('');
-      }, 1000);
+      }, 1500);
     } catch (err: any) {
-      setErrorMessage(err.message || 'Erro ao processar imagem selecionada.');
+      setErrorMessage(`Falha ao salvar a capa localmente: ${err.message || 'Erro desconhecido'}`);
     } finally {
       setIsProcessing(false);
     }
@@ -173,17 +186,30 @@ export const ChangeCoverModal: React.FC<ChangeCoverModalProps> = ({
     setIsProcessing(true);
     setErrorMessage(null);
     try {
-      const newCover = await setCustomBookCover(book, targetUrl);
-      const updatedBook: Book = { ...book, coverUrl: newCover, customCoverApplied: true };
-      setSuccessMessage('✓ Capa importada e salva com sucesso!');
+      const result = await setCustomBookCover(book, targetUrl);
+      const newCover = result.coverUrl;
+      const updatedBook: Book = { 
+        ...book, 
+        coverUrl: newCover, 
+        customCoverApplied: true,
+        isCanvasCover: false,
+        coverUpdatedAt: result.coverUpdatedAt || book.coverUpdatedAt || Date.now(),
+      };
+
+      if (result.cloudSynced) {
+        setSuccessMessage('✓ Capa salva e sincronizada na nuvem com sucesso!');
+      } else {
+        setSuccessMessage('✓ Capa salva localmente. A sincronização com a nuvem não foi concluída (offline ou limite de cota).');
+      }
+
       onCoverUpdated(updatedBook, newCover);
       setTimeout(() => {
         onClose();
         setSuccessMessage(null);
         setUrlInput('');
-      }, 1000);
+      }, 1500);
     } catch (err: any) {
-      setErrorMessage(err.message || 'Erro ao carregar a imagem da URL.');
+      setErrorMessage(`Falha ao salvar a capa localmente: ${err.message || 'Erro desconhecido'}`);
     } finally {
       setIsProcessing(false);
     }
@@ -194,16 +220,29 @@ export const ChangeCoverModal: React.FC<ChangeCoverModalProps> = ({
     setIsProcessing(true);
     setErrorMessage(null);
     try {
-      const newCover = await setCustomBookCover(book, previewUrl);
-      const updatedBook: Book = { ...book, coverUrl: newCover, customCoverApplied: true };
-      setSuccessMessage('✓ Capa oficial aplicada e sincronizada!');
+      const result = await setCustomBookCover(book, previewUrl);
+      const newCover = result.coverUrl;
+      const updatedBook: Book = { 
+        ...book, 
+        coverUrl: newCover, 
+        customCoverApplied: true,
+        isCanvasCover: false,
+        coverUpdatedAt: result.coverUpdatedAt || book.coverUpdatedAt || Date.now(),
+      };
+
+      if (result.cloudSynced) {
+        setSuccessMessage('✓ Capa salva e sincronizada na nuvem com sucesso!');
+      } else {
+        setSuccessMessage('✓ Capa salva localmente. A sincronização com a nuvem não foi concluída (offline ou limite de cota).');
+      }
+
       onCoverUpdated(updatedBook, newCover);
       setTimeout(() => {
         onClose();
         setSuccessMessage(null);
-      }, 1000);
+      }, 1500);
     } catch (err: any) {
-      setErrorMessage(err.message || 'Falha ao salvar capa selecionada.');
+      setErrorMessage(`Falha ao salvar a capa localmente: ${err.message || 'Erro desconhecido'}`);
     } finally {
       setIsProcessing(false);
     }
@@ -214,16 +253,29 @@ export const ChangeCoverModal: React.FC<ChangeCoverModalProps> = ({
     setIsProcessing(true);
     setErrorMessage(null);
     try {
-      const restored = await removeCustomBookCover(book);
-      const updatedBook: Book = { ...book, coverUrl: restored, customCoverApplied: false };
-      setSuccessMessage('✓ Capa restaurada ao padrão original.');
+      const result = await removeCustomBookCover(book);
+      const restored = result.coverUrl;
+      const updatedBook: Book = { 
+        ...book, 
+        coverUrl: restored, 
+        customCoverApplied: false,
+        isCanvasCover: result.isCanvasCover ?? false,
+        coverUpdatedAt: result.coverUpdatedAt || Date.now(),
+      };
+
+      if (result.cloudSynced) {
+        setSuccessMessage('✓ Capa original restaurada e sincronizada na nuvem com sucesso!');
+      } else {
+        setSuccessMessage('✓ Capa restaurada localmente. A sincronização com a nuvem não foi concluída (offline ou limite de cota).');
+      }
+
       onCoverUpdated(updatedBook, restored);
       setTimeout(() => {
         onClose();
         setSuccessMessage(null);
-      }, 1000);
+      }, 1500);
     } catch (err: any) {
-      setErrorMessage(err.message || 'Erro ao restaurar capa.');
+      setErrorMessage(`Falha ao restaurar capa localmente: ${err.message || 'Erro desconhecido'}`);
     } finally {
       setIsProcessing(false);
     }

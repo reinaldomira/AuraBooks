@@ -87,7 +87,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       const localBooks = await getAllBooks();
 
-      // 1. Nuvem -> Local (Baixar livros e arquivos criados em outros PCs)
+      // 1. Nuvem -> Local (Baixar livros e capas criados em outros PCs ou no celular)
       if (cloudBooks && cloudBooks.length > 0) {
         for (const cBook of cloudBooks) {
           const existing = localBooks.find(b => b.id === cBook.bookId);
@@ -100,10 +100,85 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             const hasCloudCover = isValidCoverUrl(cBook.coverUrl);
             const hasLocalCover = isValidCoverUrl(existing.coverUrl);
 
-            // Prioriza capa válida da nuvem se o local não tiver ou se a nuvem tiver capa personalizada
+            const localCoverTime = typeof existing.coverUpdatedAt === 'number' && existing.coverUpdatedAt > 0 
+              ? existing.coverUpdatedAt 
+              : (existing.addedAt || 0);
+
+            const cloudCoverTime = typeof cBook.coverUpdatedAt === 'number' && cBook.coverUpdatedAt > 0 
+              ? cBook.coverUpdatedAt 
+              : (cBook.addedAt || 0);
+
             let resolvedCover = existing.coverUrl;
-            if (hasCloudCover && (!hasLocalCover || cBook.customCoverApplied)) {
+            let resolvedCoverTime = localCoverTime;
+            let resolvedCustomApplied = !!existing.customCoverApplied;
+            let resolvedIsCanvas = !!existing.isCanvasCover;
+            let coverUpdatedFromCloud = false;
+
+            // Resolução confiável de conflitos de capa (a versão mais recente SEMPRE prevalece):
+            const isCloudExplicitRemoval = 
+              (!cBook.coverUrl || cBook.coverUrl === '') && 
+              cBook.customCoverApplied === false && 
+              cloudCoverTime > localCoverTime;
+
+            if (isCloudExplicitRemoval) {
+              // Remoção explícita na nuvem é mais recente que a capa local
+              resolvedCover = '';
+              resolvedCoverTime = cloudCoverTime;
+              resolvedCustomApplied = false;
+              resolvedIsCanvas = false;
+              coverUpdatedFromCloud = true;
+            } else if (hasCloudCover && !hasLocalCover) {
+              // Nuvem possui capa válida e local não tem
               resolvedCover = cBook.coverUrl;
+              resolvedCoverTime = cloudCoverTime;
+              resolvedCustomApplied = !!cBook.customCoverApplied;
+              resolvedIsCanvas = !!cBook.isCanvasCover;
+              coverUpdatedFromCloud = true;
+            } else if (hasCloudCover && hasLocalCover) {
+              if (existing.coverUrl === cBook.coverUrl) {
+                // Mesma capa idêntica nos dois lados: unifica os metadados mantendo o maior timestamp
+                resolvedCover = existing.coverUrl;
+                resolvedCoverTime = Math.max(localCoverTime, cloudCoverTime);
+                resolvedCustomApplied = existing.customCoverApplied || !!cBook.customCoverApplied;
+                resolvedIsCanvas = !!(existing.isCanvasCover && cBook.isCanvasCover);
+              } else {
+                // Capas diferentes: compara coverUpdatedAt estritamente (independente de Web ou Mobile)
+                if (cloudCoverTime > localCoverTime) {
+                  // Nuvem é estritamente mais recente -> Nuvem vence
+                  resolvedCover = cBook.coverUrl;
+                  resolvedCoverTime = cloudCoverTime;
+                  resolvedCustomApplied = !!cBook.customCoverApplied;
+                  resolvedIsCanvas = !!cBook.isCanvasCover;
+                  coverUpdatedFromCloud = true;
+                } else if (localCoverTime > cloudCoverTime) {
+                  // Local é estritamente mais recente -> Local prevalece intacto (será sincronizado no Passo 2)
+                  resolvedCover = existing.coverUrl;
+                  resolvedCoverTime = localCoverTime;
+                  resolvedCustomApplied = !!existing.customCoverApplied;
+                  resolvedIsCanvas = !!existing.isCanvasCover;
+                } else {
+                  // Empate no timestamp: capa real tem prioridade sobre fallback em canvas
+                  if (existing.isCanvasCover && !cBook.isCanvasCover) {
+                    resolvedCover = cBook.coverUrl;
+                    resolvedCoverTime = cloudCoverTime;
+                    resolvedCustomApplied = !!cBook.customCoverApplied;
+                    resolvedIsCanvas = false;
+                    coverUpdatedFromCloud = true;
+                  } else {
+                    resolvedCover = existing.coverUrl;
+                    resolvedCoverTime = localCoverTime;
+                    resolvedCustomApplied = !!existing.customCoverApplied;
+                    resolvedIsCanvas = !!existing.isCanvasCover;
+                  }
+                }
+              }
+            } else {
+              // Nuvem não possui capa válida (vazia, ausente ou corrompida sem remoção explícita mais recente):
+              // Preserva 100% a capa local existente (Regra 7)
+              resolvedCover = existing.coverUrl;
+              resolvedCoverTime = localCoverTime;
+              resolvedCustomApplied = !!existing.customCoverApplied;
+              resolvedIsCanvas = !!existing.isCanvasCover;
             }
 
             const shouldUpdateMeta = cloudTimestamp >= localTimestamp;
@@ -113,7 +188,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               author: cBook.author || existing.author,
               category: cBook.category || existing.category,
               coverUrl: resolvedCover,
-              customCoverApplied: cBook.customCoverApplied !== undefined ? cBook.customCoverApplied : existing.customCoverApplied,
+              customCoverApplied: resolvedCustomApplied,
+              isCanvasCover: resolvedIsCanvas,
+              coverUpdatedAt: resolvedCoverTime,
               progressPercent: shouldUpdateMeta ? cBook.progressPercent : existing.progressPercent,
               currentChapterIndex: shouldUpdateMeta ? cBook.currentChapterIndex : existing.currentChapterIndex,
               currentParagraphIndex: shouldUpdateMeta ? cBook.currentParagraphIndex : existing.currentParagraphIndex,
@@ -130,10 +207,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
             await saveBook(updatedBook);
 
-            // Se o computador local possui capa válida mas a nuvem não tinha capa, envia a capa para a nuvem
-            // para que a versão mobile no celular carregue a capa original instantaneamente!
-            if (hasLocalCover && !hasCloudCover && !isQuotaExceeded()) {
-              syncBookToCloud(currentUser.uid, updatedBook).catch(() => {});
+            // Se a capa deste livro mudou, dispara evento em tempo real para os componentes atualizarem
+            if (coverUpdatedFromCloud && typeof window !== 'undefined') {
+              window.dispatchEvent(new CustomEvent('aurabooks_book_updated', { detail: updatedBook }));
             }
 
             // Se ainda assim estiver sem capa válida no dispositivo atual (ex: celular), repara em segundo plano
@@ -176,6 +252,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               format: cBook.format || 'epub',
               coverUrl: isValidCoverUrl(cBook.coverUrl) ? cBook.coverUrl : '',
               customCoverApplied: !!cBook.customCoverApplied,
+              isCanvasCover: !!cBook.isCanvasCover,
+              coverUpdatedAt: typeof cBook.coverUpdatedAt === 'number' && cBook.coverUpdatedAt > 0 ? cBook.coverUpdatedAt : (cBook.addedAt || Date.now()),
               chapters: [], // O leitor Foliate.js usa diretamente o arquivo EPUB
               totalWords: cBook.totalWords || 0,
               estimatedReadingMinutes: Math.max(1, Math.round((cBook.totalWords || 0) / 220)),
@@ -200,6 +278,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             };
 
             await saveBook(newBook);
+
+            // Dispara evento para refletir imediatamente na UI
+            if (typeof window !== 'undefined') {
+              window.dispatchEvent(new CustomEvent('aurabooks_book_updated', { detail: newBook }));
+            }
 
             // Se o livro novo da nuvem ainda não tiver capa no banco local, repara em segundo plano
             if (!isValidCoverUrl(newBook.coverUrl)) {
@@ -231,7 +314,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
       }
 
-      // 2. Local -> Nuvem (Backup dos livros locais que ainda não estão na nuvem ou que estão sem capa na nuvem)
+      // 2. Local -> Nuvem (Sincronização dos livros locais novos ou capas locais mais recentes)
       const currentLocalBooks = await getAllBooks();
       for (const lBook of currentLocalBooks) {
         if (isQuotaExceeded()) {
@@ -253,14 +336,48 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             }
           }
         } else {
-          // Livro já está na nuvem: verifica se a capa local precisa ser enviada para a nuvem
-          // (ex: capa extraída no computador mas não sincronizada anteriormente com o celular)
+          // Livro já está na nuvem: compara timestamps de capa para enviar se o local for estritamente mais recente
           const localHasCover = isValidCoverUrl(lBook.coverUrl);
           const cloudHasCover = isValidCoverUrl(cloudBook.coverUrl);
+          const coversDiffer = localHasCover && lBook.coverUrl !== cloudBook.coverUrl;
 
-          if (localHasCover && (!cloudHasCover || lBook.customCoverApplied) && !isQuotaExceeded()) {
-            setSyncMessage(`Sincronizando capa de "${lBook.title}" com o celular...`);
-            await syncBookToCloud(currentUser.uid, lBook);
+          const localCoverTime = typeof lBook.coverUpdatedAt === 'number' && lBook.coverUpdatedAt > 0 
+            ? lBook.coverUpdatedAt 
+            : (lBook.addedAt || 0);
+
+          const cloudCoverTime = typeof cloudBook.coverUpdatedAt === 'number' && cloudBook.coverUpdatedAt > 0 
+            ? cloudBook.coverUpdatedAt 
+            : (cloudBook.addedAt || 0);
+
+          // Condição estrita para enviar capa local à nuvem:
+          // 1. Nuvem não tem capa válida e local tem capa válida, OU
+          // 2. Capas diferem E o timestamp local é estritamente mais recente, OU
+          // 3. Capas diferem, local tem capa real e nuvem só tem fallback em canvas, OU
+          // 4. Usuário removeu explicitamente a capa localmente e a alteração é mais recente que a nuvem
+          const isLocalExplicitRemoval = 
+            (!lBook.coverUrl || lBook.coverUrl === '') && 
+            lBook.customCoverApplied === false && 
+            localCoverTime > cloudCoverTime && 
+            cloudHasCover;
+
+          const shouldSendLocalCover = 
+            localHasCover && (
+              !cloudHasCover ||
+              (coversDiffer && localCoverTime > cloudCoverTime) ||
+              (coversDiffer && !lBook.isCanvasCover && cloudBook.isCanvasCover)
+            );
+
+          if ((shouldSendLocalCover || isLocalExplicitRemoval) && !isQuotaExceeded()) {
+            setSyncMessage(`Sincronizando capa de "${lBook.title}" com a nuvem...`);
+            const { syncCoverOnlyToCloud } = await import('../services/firebase');
+            await syncCoverOnlyToCloud(
+              currentUser.uid,
+              lBook.id,
+              lBook.coverUrl || '',
+              !!lBook.customCoverApplied,
+              !!lBook.isCanvasCover,
+              localCoverTime
+            );
           }
 
           if (!lBook.syncedToCloud) {
@@ -276,6 +393,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         await repairAllMissingCovers();
       } catch (covErr) {
         console.warn('Aviso ao reparar capas na sincronização:', covErr);
+      }
+
+      // Dispara evento global notificando que a biblioteca foi sincronizada
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('aurabooks_library_synced'));
       }
 
       if (isQuotaExceeded()) {

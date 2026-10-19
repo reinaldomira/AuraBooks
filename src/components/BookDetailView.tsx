@@ -373,8 +373,17 @@ export const BookDetailView: React.FC<BookDetailViewProps> = ({
                   </span>
                   <button
                     onClick={async () => {
-                      const restored = await removeCustomBookCover(currentBook);
-                      setCurrentBook(prev => ({ ...prev, coverUrl: restored, customCoverApplied: false }));
+                      const result = await removeCustomBookCover(currentBook);
+                      const restored = typeof result === 'string' ? result : result.coverUrl;
+                      const newUpdatedAt = typeof result === 'object' && result.coverUpdatedAt ? result.coverUpdatedAt : Date.now();
+                      const isCanvas = typeof result === 'object' && result.isCanvasCover !== undefined ? result.isCanvasCover : false;
+                      setCurrentBook(prev => ({ 
+                        ...prev, 
+                        coverUrl: restored, 
+                        customCoverApplied: false,
+                        isCanvasCover: isCanvas,
+                        coverUpdatedAt: newUpdatedAt
+                      }));
                       if (onRefreshBooks) await onRefreshBooks();
                     }}
                     className="text-stone-400 hover:text-rose-700 font-medium cursor-pointer"

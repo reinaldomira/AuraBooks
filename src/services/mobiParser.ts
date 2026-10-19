@@ -170,16 +170,21 @@ export async function parseMobiOrAzw3File(file: File | Blob, originalFileName?: 
     }
   }
 
-  if (!coverUrl || coverUrl.length < 50) {
+  const hasCanvasCover = !coverUrl || coverUrl.length < 50;
+  if (hasCanvasCover) {
     coverUrl = generatePublisherCanvasCover(title, author, format, category);
   }
 
+  const now = Date.now();
   return {
-    id: `user-book-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
+    id: `user-book-${now}-${Math.random().toString(36).substring(2, 8)}`,
     title,
     author,
     format,
     coverUrl,
+    customCoverApplied: false,
+    isCanvasCover: hasCanvasCover,
+    coverUpdatedAt: now,
     chapters,
     totalWords,
     estimatedReadingMinutes,
@@ -188,10 +193,10 @@ export async function parseMobiOrAzw3File(file: File | Blob, originalFileName?: 
     progressPercent: 0,
     currentChapterIndex: 0,
     currentParagraphIndex: 0,
-    lastReadAt: Date.now(),
+    lastReadAt: now,
     isFavorite: false,
     fileSize: file.size,
-    addedAt: Date.now(),
+    addedAt: now,
     description,
     language
   };

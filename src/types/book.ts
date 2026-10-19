@@ -101,6 +101,8 @@ export interface Book {
   driveSyncStatus?: DriveSyncStatus;
   literaryDetails?: BookLiteraryDetails;
   customCoverApplied?: boolean;
+  coverUpdatedAt?: number;
+  isCanvasCover?: boolean;
 }
 
 export type ReaderTheme = 'alabaster' | 'sepia' | 'dark' | 'mint';

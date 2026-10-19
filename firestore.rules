@@ -25,7 +25,7 @@ service cloud.firestore {
         && data.bookId is string && data.bookId.size() <= 128
         && data.title is string && data.title.size() <= 300
         && data.author is string && data.author.size() <= 200
-        && data.format in ['epub', 'pdf', 'txt']
+        && data.format in ['epub', 'pdf', 'txt', 'mobi', 'azw3']
         && data.progressPercent is number && data.progressPercent >= 0 && data.progressPercent <= 100
         && data.currentChapterIndex is number && data.currentChapterIndex >= 0
         && data.currentParagraphIndex is number && data.currentParagraphIndex >= 0

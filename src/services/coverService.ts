@@ -54,9 +54,8 @@ export function normalizeCoverUrl(url?: string | null): string {
   if (!url || typeof url !== 'string') return '';
   let trimmed = url.trim();
   if (trimmed.startsWith('blob:')) return ''; // Blob URLs são efêmeras e não funcionam entre dispositivos
-  if (trimmed.startsWith('http://covers.openlibrary.org')) {
-    trimmed = trimmed.replace('http://', 'https://');
-  } else if (trimmed.startsWith('http://books.google.com')) {
+  // Converte HTTP para HTTPS universalmente para não sofrer bloqueio de Conteúdo Misto em celulares (PWAs / iOS / Android)
+  if (trimmed.startsWith('http://')) {
     trimmed = trimmed.replace('http://', 'https://');
   }
   return trimmed;
@@ -70,7 +69,7 @@ export function isValidCoverUrl(url?: string | null): boolean {
   if (!url || typeof url !== 'string') return false;
   const trimmed = url.trim();
   if (trimmed.length < 15) return false;
-  if (trimmed.includes('error') || trimmed === 'null' || trimmed === 'undefined') return false;
+  if (trimmed.toLowerCase() === 'error' || trimmed === 'null' || trimmed === 'undefined' || trimmed === '[object object]') return false;
   if (trimmed.startsWith('blob:')) return false; // Blobs não são persistentes
   return (
     trimmed.startsWith('data:image/') ||
@@ -86,7 +85,6 @@ export function isValidCoverUrl(url?: string | null): boolean {
 export async function optimizeCoverImage(imageBlobOrDataUrl: Blob | string, maxWidth: number = 340): Promise<string> {
   return new Promise((resolve) => {
     const isBlob = imageBlobOrDataUrl instanceof Blob;
-    const isDataUrl = typeof imageBlobOrDataUrl === 'string' && imageBlobOrDataUrl.startsWith('data:image');
     const isRemote = typeof imageBlobOrDataUrl === 'string' && (imageBlobOrDataUrl.startsWith('http://') || imageBlobOrDataUrl.startsWith('https://'));
 
     const img = new Image();
@@ -98,6 +96,8 @@ export async function optimizeCoverImage(imageBlobOrDataUrl: Blob | string, maxW
     }
 
     let objectUrl = '';
+    let isSettled = false;
+
     const cleanUp = () => {
       if (objectUrl) {
         try {
@@ -108,11 +108,23 @@ export async function optimizeCoverImage(imageBlobOrDataUrl: Blob | string, maxW
       }
     };
 
+    const finish = (result: string) => {
+      if (isSettled) return;
+      isSettled = true;
+      cleanUp();
+      resolve(result);
+    };
+
+    // Timeout defensivo de 3.5s para nunca travar a sincronização
+    const timer = setTimeout(() => {
+      finish(typeof imageBlobOrDataUrl === 'string' ? imageBlobOrDataUrl : '');
+    }, 3500);
+
     img.onload = () => {
+      clearTimeout(timer);
       try {
         if (!img.width || !img.height) {
-          cleanUp();
-          resolve(typeof imageBlobOrDataUrl === 'string' ? imageBlobOrDataUrl : '');
+          finish(typeof imageBlobOrDataUrl === 'string' ? imageBlobOrDataUrl : '');
           return;
         }
 
@@ -126,8 +138,7 @@ export async function optimizeCoverImage(imageBlobOrDataUrl: Blob | string, maxW
         const ctx = canvas.getContext('2d');
 
         if (!ctx) {
-          cleanUp();
-          resolve(typeof imageBlobOrDataUrl === 'string' ? imageBlobOrDataUrl : '');
+          finish(typeof imageBlobOrDataUrl === 'string' ? imageBlobOrDataUrl : '');
           return;
         }
 
@@ -136,23 +147,20 @@ export async function optimizeCoverImage(imageBlobOrDataUrl: Blob | string, maxW
         ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
         
         try {
-          const optimized = canvas.toDataURL('image/jpeg', 0.80);
-          cleanUp();
-          resolve(optimized);
+          const optimized = canvas.toDataURL('image/jpeg', 0.82);
+          finish(optimized);
         } catch {
           // Se for imagem remota sem headers CORS, não consegue exportar canvas; retorna URL direta original
-          cleanUp();
-          resolve(typeof imageBlobOrDataUrl === 'string' ? imageBlobOrDataUrl : '');
+          finish(typeof imageBlobOrDataUrl === 'string' ? imageBlobOrDataUrl : '');
         }
       } catch {
-        cleanUp();
-        resolve(typeof imageBlobOrDataUrl === 'string' ? imageBlobOrDataUrl : '');
+        finish(typeof imageBlobOrDataUrl === 'string' ? imageBlobOrDataUrl : '');
       }
     };
 
     img.onerror = () => {
-      cleanUp();
-      resolve(typeof imageBlobOrDataUrl === 'string' ? imageBlobOrDataUrl : '');
+      clearTimeout(timer);
+      finish(typeof imageBlobOrDataUrl === 'string' ? imageBlobOrDataUrl : '');
     };
 
     if (isBlob) {
@@ -817,22 +825,11 @@ export async function repairMissingBookCover(
       return '';
     }
 
-    // 6. Se ainda assim não houver capa e não for forceOnline, gera capa editorial em Canvas
-    if (!resolvedCoverUrl) {
-      const canvasCover = generatePublisherCanvasCover(
-        book.title,
-        book.author,
-        book.format,
-        book.category
-      );
-      if (isValidCoverUrl(canvasCover)) {
-        resolvedCoverUrl = canvasCover;
-      }
-    }
-
-    // 7. Se obteve capa, salva e sincroniza
+    // 6. Se obteve capa real (extraída do arquivo ou online), persiste e atualiza
     if (resolvedCoverUrl) {
       book.coverUrl = resolvedCoverUrl;
+      book.isCanvasCover = false;
+      book.coverUpdatedAt = book.coverUpdatedAt || Date.now();
       await saveBook(book);
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('aurabooks_book_updated', { detail: { ...book, coverUrl: resolvedCoverUrl } }));
@@ -841,7 +838,15 @@ export async function repairMissingBookCover(
       // Sincroniza metadados com Firestore se logado
       if (auth.currentUser) {
         try {
-          await syncBookToCloud(auth.currentUser.uid, book);
+          const { syncCoverOnlyToCloud } = await import('./firebase');
+          await syncCoverOnlyToCloud(
+            auth.currentUser.uid,
+            book.id,
+            resolvedCoverUrl,
+            !!book.customCoverApplied,
+            false,
+            book.coverUpdatedAt
+          );
         } catch {
           // ignore
         }
@@ -850,9 +855,13 @@ export async function repairMissingBookCover(
       return resolvedCoverUrl;
     }
 
-    // Fallback absoluto: capa padrão em canvas
-    const fallbackCover = generatePublisherCanvasCover(book.title, book.author, book.format);
+    // 7. Fallback local em canvas (quando não há arquivo físico nem capa online)
+    // CRÍTICO: Marca isCanvasCover = true e NÃO sobregrava a nuvem com fallback em canvas
+    // para evitar que um dispositivo sem o arquivo sobrescreva uma capa real já salva na nuvem.
+    const fallbackCover = generatePublisherCanvasCover(book.title, book.author, book.format, book.category);
     book.coverUrl = fallbackCover;
+    book.isCanvasCover = true;
+    book.coverUpdatedAt = book.coverUpdatedAt || (book.addedAt || Date.now());
     await saveBook(book);
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent('aurabooks_book_updated', { detail: { ...book, coverUrl: fallbackCover } }));
@@ -861,8 +870,10 @@ export async function repairMissingBookCover(
   } catch (err) {
     console.warn(`Erro ao reparar capa do livro ${book.title}:`, err);
     if (options?.forceOnline) return '';
-    const emergencyCover = generatePublisherCanvasCover(book.title, book.author, book.format);
+    const emergencyCover = generatePublisherCanvasCover(book.title, book.author, book.format, book.category);
     book.coverUrl = emergencyCover;
+    book.isCanvasCover = true;
+    book.coverUpdatedAt = book.coverUpdatedAt || (book.addedAt || Date.now());
     await saveBook(book);
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent('aurabooks_book_updated', { detail: { ...book, coverUrl: emergencyCover } }));
@@ -871,32 +882,74 @@ export async function repairMissingBookCover(
   }
 }
 
+export interface CoverOperationResult {
+  coverUrl: string;
+  coverUpdatedAt: number;
+  isCanvasCover?: boolean;
+  localSuccess: boolean;
+  cloudSynced: boolean;
+  error?: string;
+}
+
 /**
  * Define e persiste uma capa personalizada enviada pelo usuário (arquivo local, Base64 ou URL).
  * Otimiza e redimensiona a imagem para caber perfeitamente no Firestore e IndexedDB (~30-60KB).
+ * Separa explicitamente o salvamento local da sincronização remota, preservando a capa local se a nuvem falhar.
  */
 export async function setCustomBookCover(
   book: Book,
   imageFileOrDataUrl: File | Blob | string
-): Promise<string> {
+): Promise<CoverOperationResult> {
   const optimized = await optimizeCoverImage(imageFileOrDataUrl, 380);
-  if (!optimized || optimized.length < 50) {
+  if (!optimized || !isValidCoverUrl(optimized)) {
     throw new Error('Não foi possível processar a imagem selecionada. Escolha um arquivo de imagem válido (PNG, JPG, WEBP).');
   }
 
+  const now = Date.now();
   book.coverUrl = optimized;
   book.customCoverApplied = true;
+  book.isCanvasCover = false;
+  book.coverUpdatedAt = now;
   await saveBook(book);
+
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('aurabooks_book_updated', { detail: { ...book } }));
+  }
+
+  // Etapa distinta: Sincronização remota da capa com o Firestore
+  let cloudSynced = false;
+  let syncError: string | undefined = undefined;
 
   if (auth.currentUser) {
     try {
-      await syncBookToCloud(auth.currentUser.uid, book);
-    } catch {
-      // ignore
+      const { syncCoverOnlyToCloud } = await import('./firebase');
+      cloudSynced = await syncCoverOnlyToCloud(
+        auth.currentUser.uid,
+        book.id,
+        optimized,
+        true,
+        false,
+        now,
+        true
+      );
+      if (!cloudSynced) {
+        syncError = 'Sincronização remota pendente (offline ou limite de cota)';
+      }
+    } catch (syncErr: any) {
+      console.warn('Capa salva localmente, mas a sincronização com a nuvem falhou:', syncErr);
+      cloudSynced = false;
+      syncError = syncErr?.message || 'Falha na conexão com a nuvem';
     }
   }
 
-  return optimized;
+  return {
+    coverUrl: optimized,
+    coverUpdatedAt: now,
+    isCanvasCover: false,
+    localSuccess: true,
+    cloudSynced,
+    error: syncError,
+  };
 }
 
 export interface CoverCandidate {
@@ -974,11 +1027,55 @@ export async function searchOnlineCoverCandidates(
 /**
  * Remove a capa personalizada do livro e restaura a capa padrão
  */
-export async function removeCustomBookCover(book: Book): Promise<string> {
+export async function removeCustomBookCover(book: Book): Promise<CoverOperationResult> {
+  const now = Date.now();
   book.customCoverApplied = false;
   book.coverUrl = '';
+  book.coverUpdatedAt = now;
   const restored = await repairMissingBookCover(book, { forceRegenerate: true });
-  return restored;
+
+  const finalCover = restored || '';
+  const isCanvas = !!book.isCanvasCover;
+  book.coverUrl = finalCover;
+  book.coverUpdatedAt = now;
+  await saveBook(book);
+
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('aurabooks_book_updated', { detail: { ...book } }));
+  }
+
+  let cloudSynced = false;
+  let syncError: string | undefined = undefined;
+
+  if (auth.currentUser) {
+    try {
+      const { syncCoverOnlyToCloud } = await import('./firebase');
+      cloudSynced = await syncCoverOnlyToCloud(
+        auth.currentUser.uid,
+        book.id,
+        finalCover,
+        false,
+        isCanvas,
+        now,
+        true
+      );
+      if (!cloudSynced) {
+        syncError = 'Sincronização remota pendente';
+      }
+    } catch (err: any) {
+      cloudSynced = false;
+      syncError = err?.message;
+    }
+  }
+
+  return {
+    coverUrl: finalCover,
+    coverUpdatedAt: now,
+    isCanvasCover: isCanvas,
+    localSuccess: true,
+    cloudSynced,
+    error: syncError,
+  };
 }
 
 /**

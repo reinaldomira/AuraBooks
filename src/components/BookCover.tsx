@@ -88,11 +88,14 @@ export const BookCover: React.FC<BookCoverProps> = ({
   // Atualização em tempo real quando a capa deste livro for salva em segundo plano
   useEffect(() => {
     const handleUpdated = (e: CustomEvent<Book>) => {
-      if (e.detail && e.detail.id === book.id && e.detail.coverUrl) {
+      if (e.detail && e.detail.id === book.id) {
         const clean = normalizeCoverUrl(e.detail.coverUrl);
         if (isValidCoverUrl(clean)) {
           setCurrentCoverUrl(clean);
           setImgError(false);
+        } else {
+          setCurrentCoverUrl('');
+          setImgError(true);
         }
       }
     };

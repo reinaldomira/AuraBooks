@@ -134,9 +134,14 @@ const AppContent: React.FC = () => {
         );
       }
     };
+    const handleLibrarySynced = () => {
+      refreshBooks();
+    };
     window.addEventListener('aurabooks_book_updated', handleBookUpdated as EventListener);
+    window.addEventListener('aurabooks_library_synced', handleLibrarySynced);
     return () => {
       window.removeEventListener('aurabooks_book_updated', handleBookUpdated as EventListener);
+      window.removeEventListener('aurabooks_library_synced', handleLibrarySynced);
     };
   }, []);
 

@@ -187,16 +187,21 @@ export async function parsePdfFile(file: File): Promise<Book> {
     } catch {}
   }
 
-  if (!isValidCoverUrl(coverUrl)) {
+  const hasCanvasCover = !isValidCoverUrl(coverUrl);
+  if (hasCanvasCover) {
     coverUrl = generatePublisherCanvasCover(title, author, 'pdf', 'Documentos & PDFs');
   }
 
+  const now = Date.now();
   return {
-    id: `user-book-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
+    id: `user-book-${now}-${Math.random().toString(36).substring(2, 8)}`,
     title,
     author,
     format: 'pdf',
     coverUrl,
+    customCoverApplied: false,
+    isCanvasCover: hasCanvasCover,
+    coverUpdatedAt: now,
     chapters,
     totalWords,
     estimatedReadingMinutes,
@@ -205,9 +210,9 @@ export async function parsePdfFile(file: File): Promise<Book> {
     progressPercent: 0,
     currentChapterIndex: 0,
     currentParagraphIndex: 0,
-    lastReadAt: Date.now(),
+    lastReadAt: now,
     isFavorite: false,
     fileSize: file.size,
-    addedAt: Date.now()
+    addedAt: now
   };
 }

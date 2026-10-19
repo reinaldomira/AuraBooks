@@ -244,53 +244,151 @@ function base64ToUint8Array(base64: string): Uint8Array {
 // 6. Firestore sync operations
 
 /**
+ * Sincroniza EXCLUSIVAMENTE os dados da capa com o Firestore.
+ * Preserva 100% dos outros metadados do livro (posição de leitura, CFI, progresso).
+ * Se a capa for inválida ou grande demais, retorna false e NUNCA sobrescreve a capa do Firestore com vazio.
+ */
+export async function syncCoverOnlyToCloud(
+  userId: string,
+  bookId: string,
+  coverUrl: string,
+  customCoverApplied: boolean,
+  isCanvasCover: boolean,
+  coverUpdatedAt: number,
+  force: boolean = false
+): Promise<boolean> {
+  if (isQuotaExceeded() && !force) return false;
+  const path = `users/${userId}/books/${bookId}`;
+
+  try {
+    let cleanCover = (coverUrl || '').trim();
+
+    // 1. Caso de remoção explícita da capa pelo usuário
+    if (!cleanCover && customCoverApplied === false) {
+      const payload: any = {
+        coverUrl: '',
+        customCoverApplied: false,
+        isCanvasCover: false,
+        coverUpdatedAt: typeof coverUpdatedAt === 'number' && coverUpdatedAt > 0 ? coverUpdatedAt : Date.now(),
+      };
+      await setDoc(doc(db, 'users', userId, 'books', bookId), payload, { merge: true });
+      clearQuotaExceeded();
+      return true;
+    }
+
+    // 2. Rejeita blobs efêmeros locais
+    if (cleanCover.startsWith('blob:')) {
+      return false;
+    }
+
+    // 3. Converte HTTP para HTTPS para evitar bloqueios de segurança
+    if (cleanCover.startsWith('http://')) {
+      cleanCover = cleanCover.replace('http://', 'https://');
+    }
+
+    // 3. Comprime se for imagem Base64
+    if (cleanCover.startsWith('data:image') && cleanCover.length > 35000) {
+      try {
+        const { optimizeCoverImage } = await import('./coverService');
+        const compressed = await optimizeCoverImage(cleanCover, 320);
+        if (compressed && compressed.length > 50 && compressed.length < cleanCover.length) {
+          cleanCover = compressed;
+        }
+      } catch {}
+    }
+
+    // 4. Se ainda ultrapassar 300KB, comprime mais para segurança do documento
+    if (cleanCover.startsWith('data:image') && cleanCover.length > 300000) {
+      try {
+        const { optimizeCoverImage } = await import('./coverService');
+        const ultraCompressed = await optimizeCoverImage(cleanCover, 220);
+        if (ultraCompressed && ultraCompressed.length > 50 && ultraCompressed.length < cleanCover.length) {
+          cleanCover = ultraCompressed;
+        }
+      } catch {}
+    }
+
+    // 5. Verificação estrita de tamanho: nunca excede 550KB (limite de segurança no Firestore)
+    // CRÍTICO: Não zera o campo! Retorna false preservando a capa existente intacta no Firestore.
+    if (cleanCover.length > 550000) {
+      console.warn(`[Firebase] Capa do livro ${bookId} ultrapassa o limite seguro (${cleanCover.length} bytes). O Firestore foi preservado.`);
+      return false;
+    }
+
+    // Valida formato
+    if (!cleanCover.startsWith('data:image/') && !cleanCover.startsWith('https://')) {
+      return false;
+    }
+
+    const payload: any = {
+      coverUrl: cleanCover,
+      customCoverApplied: !!customCoverApplied,
+      isCanvasCover: !!isCanvasCover,
+      coverUpdatedAt: typeof coverUpdatedAt === 'number' && coverUpdatedAt > 0 ? coverUpdatedAt : Date.now(),
+    };
+
+    await setDoc(doc(db, 'users', userId, 'books', bookId), payload, { merge: true });
+    clearQuotaExceeded();
+    return true;
+  } catch (error) {
+    if (isResourceExhaustedError(error)) {
+      setQuotaExceeded(12);
+      return false;
+    }
+    handleFirestoreError(error, OperationType.WRITE, path);
+    return false;
+  }
+}
+
+/**
  * Salva ou atualiza os metadados de um livro na coleção do usuário no Firestore.
+ * Preserva capas válidas existentes caso a nova capa falhe ou seja grande demais.
  */
 export async function syncBookToCloud(userId: string, book: Book, force: boolean = false): Promise<boolean> {
   if (isQuotaExceeded() && !force) return false;
   const path = `users/${userId}/books/${book.id}`;
   try {
-    let coverToSync = (book.coverUrl || '').trim();
+    let coverToSync: string | undefined = undefined;
+    let coverFailed = false;
 
-    // 1. Blob URLs não persistem nem funcionam em outros aparelhos
-    if (coverToSync.startsWith('blob:')) {
-      coverToSync = '';
-    }
-
-    // 2. Converte HTTP de acervos públicos para HTTPS para não ser bloqueado por Mixed Content em celulares
-    if (coverToSync.startsWith('http://covers.openlibrary.org')) {
-      coverToSync = coverToSync.replace('http://', 'https://');
-    } else if (coverToSync.startsWith('http://books.google.com')) {
-      coverToSync = coverToSync.replace('http://', 'https://');
-    }
-
-    // 3. Otimiza capas em Base64 para tamanho ultraleve (~25-45KB), perfeito para sincronizar com celulares instantaneamente
-    if (coverToSync.startsWith('data:image') && coverToSync.length > 50000) {
-      try {
-        const { optimizeCoverImage } = await import('./coverService');
-        const compressed = await optimizeCoverImage(coverToSync, 320);
-        if (compressed && compressed.length > 20 && compressed.length < coverToSync.length) {
-          coverToSync = compressed;
-          book.coverUrl = compressed;
+    if (book.coverUrl && typeof book.coverUrl === 'string') {
+      let candidate = book.coverUrl.trim();
+      if (candidate.startsWith('blob:')) {
+        coverFailed = true;
+      } else {
+        if (candidate.startsWith('http://')) {
+          candidate = candidate.replace('http://', 'https://');
         }
-      } catch {}
-    }
 
-    // 4. Se ainda assim ultrapassar 450KB, reduz a resolução para garantir armazenamento no Firestore
-    if (coverToSync.startsWith('data:image') && coverToSync.length > 450000) {
-      try {
-        const { optimizeCoverImage } = await import('./coverService');
-        const ultraCompressed = await optimizeCoverImage(coverToSync, 240);
-        if (ultraCompressed && ultraCompressed.length < 450000) {
-          coverToSync = ultraCompressed;
-          book.coverUrl = ultraCompressed;
+        if (candidate.startsWith('data:image') && candidate.length > 35000) {
+          try {
+            const { optimizeCoverImage } = await import('./coverService');
+            const compressed = await optimizeCoverImage(candidate, 320);
+            if (compressed && compressed.length > 50 && compressed.length < candidate.length) {
+              candidate = compressed;
+              book.coverUrl = compressed;
+            }
+          } catch {}
         }
-      } catch {}
-    }
 
-    // Se mesmo após todas as tentativas for maior que 750KB, remove para não rejeitar o doc no Firestore
-    if (coverToSync.length > 750000) {
-      coverToSync = '';
+        if (candidate.startsWith('data:image') && candidate.length > 300000) {
+          try {
+            const { optimizeCoverImage } = await import('./coverService');
+            const ultraCompressed = await optimizeCoverImage(candidate, 220);
+            if (ultraCompressed && ultraCompressed.length < candidate.length) {
+              candidate = ultraCompressed;
+              book.coverUrl = ultraCompressed;
+            }
+          } catch {}
+        }
+
+        if (candidate.length > 550000) {
+          console.warn(`[Firebase] Capa do livro ${book.id} ultrapassa o limite seguro (${candidate.length} bytes). O campo coverUrl remoto foi preservado.`);
+          coverFailed = true;
+        } else if (candidate.startsWith('data:image/') || candidate.startsWith('https://')) {
+          coverToSync = candidate;
+        }
+      }
     }
 
     const cleanData: any = {
@@ -300,8 +398,6 @@ export async function syncBookToCloud(userId: string, book: Book, force: boolean
       author: (book.author || 'Autor desconhecido').slice(0, 200),
       format: book.format || 'epub',
       category: (book.category || 'Geral').slice(0, 100),
-      coverUrl: coverToSync,
-      customCoverApplied: !!book.customCoverApplied,
       progressPercent: typeof book.progressPercent === 'number' ? Math.max(0, Math.min(100, Math.round(book.progressPercent))) : 0,
       currentChapterIndex: typeof book.currentChapterIndex === 'number' ? Math.max(0, book.currentChapterIndex) : 0,
       currentParagraphIndex: typeof book.currentParagraphIndex === 'number' ? Math.max(0, book.currentParagraphIndex) : 0,
@@ -310,6 +406,23 @@ export async function syncBookToCloud(userId: string, book: Book, force: boolean
       totalWords: typeof book.totalWords === 'number' ? book.totalWords : 0,
       estimatedAudioMinutes: typeof book.estimatedAudioMinutes === 'number' ? book.estimatedAudioMinutes : 0,
     };
+
+    // CRÍTICO: Não sobrescreve coverUrl no Firestore se a capa falhou ou ultrapassou o tamanho.
+    // Preserva a capa já existente na nuvem usando { merge: true }.
+    if (coverToSync !== undefined) {
+      cleanData.coverUrl = coverToSync;
+      cleanData.customCoverApplied = !!book.customCoverApplied;
+      cleanData.isCanvasCover = !!book.isCanvasCover;
+      cleanData.coverUpdatedAt = typeof book.coverUpdatedAt === 'number' && book.coverUpdatedAt > 0 
+        ? book.coverUpdatedAt 
+        : Date.now();
+    } else if (book.customCoverApplied === false && (!book.coverUrl || book.coverUrl === '')) {
+      // Usuário solicitou explicitamente a remoção da capa
+      cleanData.coverUrl = '';
+      cleanData.customCoverApplied = false;
+      cleanData.isCanvasCover = false;
+      cleanData.coverUpdatedAt = typeof book.coverUpdatedAt === 'number' && book.coverUpdatedAt > 0 ? book.coverUpdatedAt : Date.now();
+    }
 
     if (book.epubLocationCfi) {
       cleanData.epubLocationCfi = book.epubLocationCfi.slice(0, 1000);
@@ -342,6 +455,10 @@ export async function syncBookToCloud(userId: string, book: Book, force: boolean
     await setDoc(doc(db, 'users', userId, 'books', book.id), cleanData, { merge: true });
     // Sucesso: remove pausa se houver
     clearQuotaExceeded();
+
+    if (coverFailed) {
+      return false;
+    }
     return true;
   } catch (error) {
     if (isResourceExhaustedError(error)) {
